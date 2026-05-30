@@ -4,7 +4,7 @@ const process = require('process');
 const path = require('path');
 const { Client } = require('machcli');
 const ROOT = path.dirname(path.dirname(path.resolve(process.argv[1])));
-const { dbConfig, intArg, parseArgs } = require(path.join(ROOT, 'lib', 'env.js'));
+const { dbConfig, intArg, parseArgs, resolveProjectPath } = require(path.join(ROOT, 'lib', 'env.js'));
 const { TABLES, ensureSchema } = require(path.join(ROOT, 'lib', 'schema.js'));
 const { poseFromOxts, readPointBytes, sequenceInfo } = require(path.join(ROOT, 'lib', 'kitti.js'));
 
@@ -19,7 +19,7 @@ function closeQuietly(obj) {
 
 function main() {
   const args = parseArgs(process.argv);
-  const dataRoot = args.dataRoot || args['data-root'] || 'data/raw/kitti';
+  const dataRoot = resolveProjectPath(args.dataRoot || args['data-root'], 'data/raw/kitti', ROOT);
   const sequenceList = String(args.sequences || args.sequence || '2011_09_30_drive_0028_sync,2011_10_03_drive_0027_sync')
     .split(',')
     .map(s => s.trim())

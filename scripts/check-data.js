@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const process = require('process');
 const ROOT = path.dirname(path.dirname(path.resolve(process.argv[1])));
-const { parseArgs } = require(path.join(ROOT, 'lib', 'env.js'));
+const { parseArgs, resolveProjectPath } = require(path.join(ROOT, 'lib', 'env.js'));
 
 function println() {
   if (console.println) console.println.apply(console, arguments);
@@ -12,7 +12,7 @@ function println() {
 }
 
 const args = parseArgs(process.argv);
-const dataRoot = args.dataRoot || args['data-root'] || 'data/raw/kitti';
+const dataRoot = resolveProjectPath(args.dataRoot || args['data-root'], 'data/raw/kitti', ROOT);
 const sequence = args.sequence || '2011_09_30_drive_0028_sync';
 const dateDir = sequence.slice(0, 10);
 const checks = [

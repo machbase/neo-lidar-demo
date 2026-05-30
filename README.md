@@ -211,6 +211,8 @@ $NEO jsh scripts/check-data.js --data-root data/raw/kitti --sequence 2011_09_30_
 $NEO jsh scripts/check-data.js --data-root data/raw/kitti --sequence 2011_10_03_drive_0027_sync
 ```
 
+JSH 출력의 `cwd`가 `/work`로 보이더라도 정상입니다. 스크립트는 상대 `--data-root`를 셸에서 실행한 프로젝트 루트 기준으로 해석합니다.
+
 `velodyne_points/data`가 `true`로 나오면 LiDAR frame 파일이 있는 것입니다.
 
 frame 수를 shell에서 확인할 수도 있습니다.

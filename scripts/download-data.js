@@ -5,7 +5,7 @@ const http = require('http');
 const path = require('path');
 const process = require('process');
 const ROOT = path.dirname(path.dirname(path.resolve(process.argv[1])));
-const { parseArgs } = require(path.join(ROOT, 'lib', 'env.js'));
+const { parseArgs, resolveProjectPath } = require(path.join(ROOT, 'lib', 'env.js'));
 
 const DEFAULT_MAX_INFLIGHT_MB = 1024;
 const DEFAULT_ASSEMBLE_BUFFER_MB = 8;
@@ -304,7 +304,7 @@ async function download(url, target, chunkBytes, parallel, options) {
 
 async function main() {
   const args = parseArgs(process.argv);
-  const out = path.resolve(args.out || 'data/raw/kitti');
+  const out = resolveProjectPath(args.out, 'data/raw/kitti', ROOT);
   const extractRequested = boolArg(args.extract, false);
   const extractOnlyRequested = boolArg(args.extractOnly || args['extract-only'], false);
   const chunkMb = positiveInt(args.chunkMb || args['chunk-mb'], 64);
