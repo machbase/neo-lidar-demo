@@ -122,7 +122,7 @@ password: manager
 export PHY_DB_HOST=127.0.0.1
 export PHY_DB_PORT=5656
 export PHY_DB_USER=sys
-export PHY_DB_PASS=manager
+export PHY_DB_PASSWORD=manager
 ```
 
 접속값을 바꿨다면 이후 모든 `$NEO jsh ...` 명령이 같은 환경변수를 사용합니다.
@@ -136,11 +136,13 @@ export PHY_DB_PASS=manager
 2011_10_03_drive_0027_sync
 ```
 
-아래 명령은 필요한 KITTI calibration zip과 drive zip을 다운로드하고 `data/raw/kitti` 아래에 압축을 풉니다.
+아래 명령은 필요한 KITTI calibration zip과 drive zip을 병렬 range 다운로드하고 `data/raw/kitti` 아래에 압축을 풉니다. 두 drive zip만 약 37 GiB이므로 압축 해제 공간까지 충분히 확보해야 합니다.
 
 ```sh
-$NEO jsh scripts/download-data.js --out data/raw/kitti
+$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64
 ```
+
+`--parallel`은 동시에 받는 range chunk 수이고 `--chunk-mb`는 chunk 크기입니다. 중간에 끊기면 같은 명령을 다시 실행하면 완료된 part를 재사용합니다.
 
 다운로드되는 주요 파일:
 
@@ -499,11 +501,15 @@ $NEO jsh scripts/ingest.js --data-root data/raw/kitti
 
 ### 데이터 다운로드가 중간에 끊겼을 때
 
-다운로드 파일은 `data/raw/kitti/archives` 아래에 있습니다. 깨진 zip이나 `.part` 파일을 지우고 다시 실행합니다.
+다운로드 파일은 `data/raw/kitti/archives` 아래에 있습니다. 중간에 끊기면 먼저 같은 명령을 다시 실행합니다. 스크립트는 `.parts` 디렉터리의 완료된 chunk와 `.part` 조립 파일을 재사용합니다.
+
+계속 실패하거나 파일 크기가 맞지 않는 zip이 남아 있으면 해당 zip, `.part`, `.parts`만 지우고 다시 실행합니다.
 
 ```sh
-rm -f data/raw/kitti/archives/*.part
-$NEO jsh scripts/download-data.js --out data/raw/kitti
+rm -rf data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip \
+       data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip.part \
+       data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip.parts
+$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64
 ```
 
 ### 포인트가 느리게 뜰 때
@@ -539,8 +545,9 @@ git clone https://github.com/machbase/neo-lidar-demo.git
 # 4. 프로젝트 디렉터리로 이동합니다.
 cd neo-lidar-demo
 
-# 5. 데이터 파일을 다운로드하고 압축을 풉니다.
-$NEO jsh scripts/download-data.js --out data/raw/kitti
+# 5. 데이터 파일을 병렬 다운로드하고 압축을 풉니다.
+#    drive zip만 약 37 GiB이므로 디스크 여유 공간이 필요합니다.
+$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64
 
 # 6. 데이터가 제대로 풀렸는지 확인합니다.
 $NEO jsh scripts/check-data.js --data-root data/raw/kitti --sequence 2011_09_30_drive_0028_sync
