@@ -4,9 +4,11 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const process = require('process');
-const zip = require('archive/zip');
 const ROOT = path.dirname(path.dirname(path.resolve(process.argv[1])));
 const { parseArgs } = require(path.join(ROOT, 'lib', 'env.js'));
+
+const DEFAULT_MAX_INFLIGHT_MB = 1024;
+const DEFAULT_ASSEMBLE_BUFFER_MB = 8;
 
 const KITTI_RAW_BASE = 'https://s3.eu-central-1.amazonaws.com/avg-kitti/raw_data';
 const DEFAULT_FILES = [
@@ -42,6 +44,15 @@ function positiveInt(value, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function boolArg(value, fallback) {
+  if (value === true || value === false) return value;
+  if (value == null) return fallback;
+  const s = String(value).toLowerCase();
+  if (s === 'true' || s === '1' || s === 'yes') return true;
+  if (s === 'false' || s === '0' || s === 'no') return false;
+  return fallback;
+}
+
 function fileSize(file) {
   try {
     return fs.statSync(file).size;
@@ -58,6 +69,12 @@ function safeRmdir(dir) {
   try { fs.rmdirSync(dir); } catch (_) {}
 }
 
+function closeFd(fd) {
+  try {
+    if (fd >= 0) fs.closeSync(fd);
+  } catch (_) {}
+}
+
 function pad(n, width) {
   let s = String(n);
   while (s.length < width) s = `0${s}`;
@@ -70,6 +87,49 @@ function header(headers, name) {
     if (String(key).toLowerCase() === lower) return headers[key];
   }
   return undefined;
+}
+
+function readAt(fd, position, length) {
+  const buffer = new Uint8Array(length);
+  let offset = 0;
+  while (offset < length) {
+    const n = fs.readSync(fd, buffer, offset, length - offset, position + offset);
+    if (!n) break;
+    offset += n;
+  }
+  if (offset !== length) {
+    throw new Error(`short file read at ${position} expected=${length} actual=${offset}`);
+  }
+  return buffer;
+}
+
+function writeAll(fd, bytes) {
+  let offset = 0;
+  while (offset < bytes.length) {
+    const n = fs.writeSync(fd, bytes, offset, bytes.length - offset);
+    if (!n) throw new Error('short file write');
+    offset += n;
+  }
+}
+
+function appendFileContents(target, source, bufferBytes) {
+  let inFd = -1;
+  let outFd = -1;
+  try {
+    inFd = fs.openSync(source, 'r');
+    outFd = fs.openSync(target, 'a');
+    let position = 0;
+    let remaining = fs.fstatSync(inFd).size;
+    while (remaining > 0) {
+      const size = Math.min(bufferBytes, remaining);
+      writeAll(outFd, readAt(inFd, position, size));
+      position += size;
+      remaining -= size;
+    }
+  } finally {
+    closeFd(inFd);
+    closeFd(outFd);
+  }
 }
 
 function getBuffer(url, options, allowedStatuses) {
@@ -116,6 +176,12 @@ function chunksFor(total, chunkBytes) {
     });
   }
   return chunks;
+}
+
+function enforceDownloadBudget(chunkMb, parallel, maxInflightMb) {
+  const inflightMb = chunkMb * parallel;
+  if (inflightMb <= maxInflightMb) return;
+  throw new Error(`unsafe download memory budget: --parallel ${parallel} * --chunk-mb ${chunkMb} = ${inflightMb}MiB exceeds --max-inflight-mb ${maxInflightMb}. JSH HTTP buffers each range chunk; use --parallel 4 --chunk-mb 64, or explicitly raise --max-inflight-mb to override.`);
 }
 
 async function runPool(items, parallel, worker) {
@@ -173,7 +239,7 @@ function assembledSize(tmp, chunkBytes, total) {
   return size;
 }
 
-function assembleParts(target, partDir, chunks, chunkBytes, total) {
+function assembleParts(target, partDir, chunks, chunkBytes, total, assembleBufferBytes) {
   const tmp = `${target}.part`;
   let current = assembledSize(tmp, chunkBytes, total);
   if (current > 0) println('resuming assembled file', tmp, `bytes=${current}`);
@@ -188,8 +254,7 @@ function assembleParts(target, partDir, chunks, chunkBytes, total) {
     if (size !== chunk.size) {
       throw new Error(`missing downloaded part: ${part}`);
     }
-    const bytes = fs.readFileSync(part, 'buffer');
-    fs.appendFileSync(tmp, bytes);
+    appendFileContents(tmp, part, assembleBufferBytes);
     safeUnlink(part);
     current += chunk.size;
   }
@@ -202,15 +267,11 @@ function assembleParts(target, partDir, chunks, chunkBytes, total) {
   safeRmdir(partDir);
 }
 
-async function download(url, target, chunkBytes, parallel) {
+async function download(url, target, chunkBytes, parallel, options) {
   const total = await contentLength(url);
   const existing = fileSize(target);
   if (existing === total) {
     return { target: target, bytes: total, skipped: true };
-  }
-  if (existing >= 0) {
-    println('replacing incomplete archive', target, `expected=${total}`, `actual=${existing}`);
-    safeUnlink(target);
   }
 
   const partDir = `${target}.parts`;
@@ -219,6 +280,12 @@ async function download(url, target, chunkBytes, parallel) {
   const assembled = assembledSize(`${target}.part`, chunkBytes, total);
   const pending = chunks.filter(chunk => chunk.end + 1 > assembled);
   let complete = chunks.length - pending.length;
+
+  if (pending.length > 0) enforceDownloadBudget(options.chunkMb, parallel, options.maxInflightMb);
+  if (existing >= 0) {
+    println('replacing incomplete archive', target, `expected=${total}`, `actual=${existing}`);
+    safeUnlink(target);
+  }
 
   await runPool(pending, parallel, async (chunk) => {
     const part = path.join(partDir, `part-${pad(chunk.index, 6)}`);
@@ -231,26 +298,28 @@ async function download(url, target, chunkBytes, parallel) {
     println('downloaded', target, `${complete}/${chunks.length}`, `${Math.round((complete / chunks.length) * 100)}%`);
   });
 
-  assembleParts(target, partDir, chunks, chunkBytes, total);
+  assembleParts(target, partDir, chunks, chunkBytes, total, options.assembleBufferBytes);
   return { target: target, bytes: total, chunks: chunks.length, parallel: parallel };
-}
-
-function extractZip(file, outDir) {
-  const archive = new zip.Zip(file);
-  archive.extractAllTo(outDir, { overwrite: true });
 }
 
 async function main() {
   const args = parseArgs(process.argv);
   const out = path.resolve(args.out || 'data/raw/kitti');
-  const extract = args.extract !== false && args.extract !== 'false';
+  const extractRequested = boolArg(args.extract, false);
+  const extractOnlyRequested = boolArg(args.extractOnly || args['extract-only'], false);
   const chunkMb = positiveInt(args.chunkMb || args['chunk-mb'], 64);
   const parallel = positiveInt(args.parallel, 4);
+  const maxInflightMb = positiveInt(args.maxInflightMb || args['max-inflight-mb'], DEFAULT_MAX_INFLIGHT_MB);
+  const assembleBufferMb = positiveInt(args.assembleBufferMb || args['assemble-buffer-mb'], DEFAULT_ASSEMBLE_BUFFER_MB);
   const chunkBytes = chunkMb * 1024 * 1024;
+  const assembleBufferBytes = assembleBufferMb * 1024 * 1024;
   const selected = args.file
     ? DEFAULT_FILES.filter(item => item.name.indexOf(args.file) >= 0)
     : DEFAULT_FILES;
 
+  if (extractRequested || extractOnlyRequested) {
+    throw new Error('zip extraction is handled outside JSH. Download with this script, then use unzip, Expand-Archive, or 7-Zip.');
+  }
   if (selected.length === 0) throw new Error('no matching dataset file');
   ensureDir(out);
   ensureDir(path.join(out, 'archives'));
@@ -259,11 +328,11 @@ async function main() {
   for (const item of selected) {
     const target = path.join(out, 'archives', item.name);
     println('downloading', item.url);
-    results.push(await download(item.url, target, chunkBytes, parallel));
-    if (extract) {
-      println('extracting', target);
-      extractZip(target, out);
-    }
+    results.push(await download(item.url, target, chunkBytes, parallel, {
+      chunkMb: chunkMb,
+      maxInflightMb: maxInflightMb,
+      assembleBufferBytes: assembleBufferBytes
+    }));
   }
 
   println(JSON.stringify({ ok: true, out: out, files: results }, null, 2));

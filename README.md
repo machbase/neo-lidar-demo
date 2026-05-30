@@ -127,7 +127,7 @@ export PHY_DB_PASSWORD=manager
 
 접속값을 바꿨다면 이후 모든 `$NEO jsh ...` 명령이 같은 환경변수를 사용합니다.
 
-## Step 4. 데이터 다운로드
+## Step 4. 데이터 다운로드와 unzip
 
 데모는 KITTI raw 데이터 중 두 개 drive를 사용합니다.
 
@@ -136,13 +136,15 @@ export PHY_DB_PASSWORD=manager
 2011_10_03_drive_0027_sync
 ```
 
-아래 명령은 필요한 KITTI calibration zip과 drive zip을 병렬 range 다운로드하고 `data/raw/kitti` 아래에 압축을 풉니다. 두 drive zip만 약 37 GiB이므로 압축 해제 공간까지 충분히 확보해야 합니다.
+다운로드와 압축 해제는 분리해서 진행합니다. 이 문서에서는 JSH 스크립트를 ZIP 파일 다운로드에만 사용하고, 압축 해제는 OS의 외부 unzip 프로그램을 사용합니다. 두 drive zip만 약 37 GiB이므로 ZIP과 압축 해제 결과를 둘 다 저장할 디스크 공간을 충분히 확보해야 합니다.
+
+### 4-1. ZIP 다운로드
 
 ```sh
-$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64
+$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64 --download-only
 ```
 
-`--parallel`은 동시에 받는 range chunk 수이고 `--chunk-mb`는 chunk 크기입니다. 중간에 끊기면 같은 명령을 다시 실행하면 완료된 part를 재사용합니다.
+`--parallel`은 동시에 받는 range chunk 수이고 `--chunk-mb`는 chunk 크기입니다. JSH HTTP 클라이언트는 range chunk를 파일에 쓰기 전에 메모리에 올리므로 다운로드 중 메모리 사용량은 대략 `parallel * chunk-mb` MiB 이상으로 잡아야 합니다. 스크립트는 기본적으로 이 값이 1024MiB를 넘으면 중단합니다. 메모리가 적은 WSL에서는 `--parallel 2 --chunk-mb 32`처럼 더 낮춰서 실행합니다.
 
 다운로드되는 주요 파일:
 
@@ -151,6 +153,48 @@ data/raw/kitti/archives/2011_09_30_calib.zip
 data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip
 data/raw/kitti/archives/2011_10_03_calib.zip
 data/raw/kitti/archives/2011_10_03_drive_0027_sync.zip
+```
+
+### 4-2. Linux 또는 WSL에서 unzip
+
+```sh
+unzip -o data/raw/kitti/archives/2011_09_30_calib.zip -d data/raw/kitti
+unzip -o data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip -d data/raw/kitti
+unzip -o data/raw/kitti/archives/2011_10_03_calib.zip -d data/raw/kitti
+unzip -o data/raw/kitti/archives/2011_10_03_drive_0027_sync.zip -d data/raw/kitti
+```
+
+`unzip`이 없으면 먼저 설치합니다.
+
+```sh
+sudo apt update
+sudo apt install unzip
+```
+
+### 4-3. Windows PowerShell에서 unzip
+
+Windows에서 프로젝트 디렉터리를 열고 PowerShell로 실행합니다.
+
+```powershell
+$dest = "data\raw\kitti"
+$archives = "data\raw\kitti\archives"
+
+Expand-Archive -Force -Path "$archives\2011_09_30_calib.zip" -DestinationPath $dest
+Expand-Archive -Force -Path "$archives\2011_09_30_drive_0028_sync.zip" -DestinationPath $dest
+Expand-Archive -Force -Path "$archives\2011_10_03_calib.zip" -DestinationPath $dest
+Expand-Archive -Force -Path "$archives\2011_10_03_drive_0027_sync.zip" -DestinationPath $dest
+```
+
+7-Zip을 사용한다면 같은 위치에서 아래처럼 풀 수 있습니다.
+
+```powershell
+$dest = "data\raw\kitti"
+$archives = "data\raw\kitti\archives"
+
+7z x "$archives\2011_09_30_calib.zip" "-o$dest" -y
+7z x "$archives\2011_09_30_drive_0028_sync.zip" "-o$dest" -y
+7z x "$archives\2011_10_03_calib.zip" "-o$dest" -y
+7z x "$archives\2011_10_03_drive_0027_sync.zip" "-o$dest" -y
 ```
 
 압축 해제 후 주요 디렉터리:
@@ -509,8 +553,19 @@ $NEO jsh scripts/ingest.js --data-root data/raw/kitti
 rm -rf data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip \
        data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip.part \
        data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip.parts
-$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64
+$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64 --download-only
 ```
+
+다운로드는 끝났는데 압축 해제 중 실패했다면 ZIP을 다시 받지 말고 외부 unzip 명령만 다시 실행합니다. Linux 또는 WSL에서는 아래처럼 다시 풉니다.
+
+```sh
+unzip -o data/raw/kitti/archives/2011_09_30_calib.zip -d data/raw/kitti
+unzip -o data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip -d data/raw/kitti
+unzip -o data/raw/kitti/archives/2011_10_03_calib.zip -d data/raw/kitti
+unzip -o data/raw/kitti/archives/2011_10_03_drive_0027_sync.zip -d data/raw/kitti
+```
+
+`--parallel 16 --chunk-mb 512`처럼 실행하면 다운로드 단계에서만 동시에 최대 8192MiB 이상의 버퍼가 필요할 수 있습니다. 이런 설정은 메모리가 넉넉한 환경에서만 `--max-inflight-mb`로 명시적으로 허용합니다.
 
 ### 포인트가 느리게 뜰 때
 
@@ -545,26 +600,32 @@ git clone https://github.com/machbase/neo-lidar-demo.git
 # 4. 프로젝트 디렉터리로 이동합니다.
 cd neo-lidar-demo
 
-# 5. 데이터 파일을 병렬 다운로드하고 압축을 풉니다.
+# 5. 데이터 ZIP 파일을 병렬 다운로드합니다.
 #    drive zip만 약 37 GiB이므로 디스크 여유 공간이 필요합니다.
-$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64
+$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64 --download-only
 
-# 6. 데이터가 제대로 풀렸는지 확인합니다.
+# 6. Linux 또는 WSL에서 외부 unzip 프로그램으로 압축을 풉니다.
+unzip -o data/raw/kitti/archives/2011_09_30_calib.zip -d data/raw/kitti
+unzip -o data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip -d data/raw/kitti
+unzip -o data/raw/kitti/archives/2011_10_03_calib.zip -d data/raw/kitti
+unzip -o data/raw/kitti/archives/2011_10_03_drive_0027_sync.zip -d data/raw/kitti
+
+# 7. 데이터가 제대로 풀렸는지 확인합니다.
 $NEO jsh scripts/check-data.js --data-root data/raw/kitti --sequence 2011_09_30_drive_0028_sync
 $NEO jsh scripts/check-data.js --data-root data/raw/kitti --sequence 2011_10_03_drive_0027_sync
 
-# 7. 기존 데모 테이블을 지우고 새로 만듭니다.
+# 8. 기존 데모 테이블을 지우고 새로 만듭니다.
 $NEO jsh scripts/reset-schema.js
 
-# 8. KITTI 데이터를 Machbase Neo DB에 로딩합니다.
+# 9. KITTI 데이터를 Machbase Neo DB에 로딩합니다.
 $NEO jsh scripts/ingest.js --data-root data/raw/kitti
 
-# 9. 데모 서버를 백그라운드로 실행합니다.
+# 10. 데모 서버를 백그라운드로 실행합니다.
 mkdir -p .run
 setsid $NEO jsh app/server.js --host 127.0.0.1 --port 56802 > .run/server-56802.log 2>&1 < /dev/null &
 echo $! > .run/server-56802.pid
 
-# 10. 서버가 정상인지 확인합니다.
+# 11. 서버가 정상인지 확인합니다.
 curl http://127.0.0.1:56802/api/health
 ```
 
