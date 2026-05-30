@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Machbase Physical AI Demo</title>
+  <title>Lidar Data Simulation by Machbase Neo</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
       <canvas id="scene"></canvas>
       <div class="topbar">
         <div>
-          <h1>Machbase Physical AI</h1>
+          <h1>Lidar Data Simulation by Machbase Neo</h1>
           <p id="datasetLabel">Loading dataset</p>
         </div>
         <div class="status" id="sourceLabel">initializing</div>
@@ -22,6 +22,30 @@
         <div><span>Speed</span><strong id="speed">0.0 m/s</strong></div>
         <div><span>Points</span><strong id="points">0</strong></div>
         <div><span>LOD</span><strong id="lodLabel">1</strong></div>
+      </div>
+      <div class="telemetry-panel">
+        <div><span>Source</span><strong id="sourceFrameLabel">--</strong></div>
+        <div><span>Raw / shown</span><strong id="pointRatioLabel">--</strong></div>
+        <div><span>Downsample</span><strong id="downsampleLabel">--</strong></div>
+        <div><span>Query</span><strong id="queryLatencyLabel">--</strong></div>
+      </div>
+      <div class="color-legend" id="colorLegend">
+        <div class="legend-head">
+          <span id="colorModeLabel">Intensity</span>
+          <strong id="colorRangeLabel">0.00 - 1.00</strong>
+        </div>
+        <div class="legend-ramp" id="colorRamp"></div>
+        <div class="legend-scale">
+          <span id="colorMinLabel">Low</span>
+          <span id="colorMaxLabel">High</span>
+        </div>
+      </div>
+      <div class="minimap-panel">
+        <div class="minimap-head">
+          <span>Top view</span>
+          <strong id="miniMapScaleLabel">50m</strong>
+        </div>
+        <canvas id="miniMap" width="220" height="160" aria-label="Top-down LiDAR range map"></canvas>
       </div>
     </section>
     <section class="controls">
@@ -37,6 +61,12 @@
         <option value="0">LOD 0</option>
         <option value="1">LOD 1</option>
         <option value="2" selected>LOD 2</option>
+      </select>
+      <select id="colorSelect" aria-label="Point cloud color mode">
+        <option value="intensity" selected>Intensity</option>
+        <option value="distance">Distance</option>
+        <option value="height">Height</option>
+        <option value="flat">Flat</option>
       </select>
       <select id="cameraSelect" aria-label="Camera view">
         <option value="orbit">Orbit</option>

@@ -6,6 +6,7 @@ const timeline = document.getElementById('timeline');
 const playButton = document.getElementById('playButton');
 const speedSelect = document.getElementById('speedSelect');
 const lodSelect = document.getElementById('lodSelect');
+const colorSelect = document.getElementById('colorSelect');
 const cameraSelect = document.getElementById('cameraSelect');
 const datasetLabel = document.getElementById('datasetLabel');
 const sourceLabel = document.getElementById('sourceLabel');
@@ -14,6 +15,17 @@ const speedLabel = document.getElementById('speed');
 const pointsLabel = document.getElementById('points');
 const lodLabel = document.getElementById('lodLabel');
 const timeLabel = document.getElementById('timeLabel');
+const sourceFrameLabel = document.getElementById('sourceFrameLabel');
+const pointRatioLabel = document.getElementById('pointRatioLabel');
+const downsampleLabel = document.getElementById('downsampleLabel');
+const queryLatencyLabel = document.getElementById('queryLatencyLabel');
+const colorModeLabel = document.getElementById('colorModeLabel');
+const colorRangeLabel = document.getElementById('colorRangeLabel');
+const colorRamp = document.getElementById('colorRamp');
+const colorMinLabel = document.getElementById('colorMinLabel');
+const colorMaxLabel = document.getElementById('colorMaxLabel');
+const miniMap = document.getElementById('miniMap');
+const miniMapScaleLabel = document.getElementById('miniMapScaleLabel');
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -23,6 +35,9 @@ renderer.toneMappingExposure = 1.15;
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x111316, 80, 220);
+const miniMapCtx = miniMap.getContext('2d');
+const MINI_MAP_RANGE_M = 50;
+const MINI_MAP_RINGS_M = [10, 25, 50];
 
 const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 800);
 camera.position.set(0, -58, 34);
@@ -153,6 +168,60 @@ const pointMaterial = new THREE.PointsMaterial({
 let pointCloud = new THREE.Points(new THREE.BufferGeometry(), pointMaterial);
 scene.add(pointCloud);
 
+const COLOR_MODES = {
+  intensity: {
+    label: 'Intensity',
+    minLabel: 'Low',
+    maxLabel: 'High',
+    range: (data) => [data.stats.minIntensity, data.stats.maxIntensity],
+    value: (_x, _y, _z, intensity) => intensity,
+    gradient: '#18323d, #23c7a9, #f2b84b',
+    stops: [
+      [0.0, [0.08, 0.18, 0.24]],
+      [0.55, [0.14, 0.78, 0.66]],
+      [1.0, [0.95, 0.72, 0.28]]
+    ]
+  },
+  distance: {
+    label: 'Distance',
+    minLabel: 'Near',
+    maxLabel: 'Far',
+    range: (data) => [data.stats.minDistance, data.stats.maxDistance],
+    value: (x, y, z) => Math.sqrt(x * x + y * y + z * z),
+    gradient: '#f2b84b, #23c7a9, #5fa8ff',
+    stops: [
+      [0.0, [0.95, 0.72, 0.28]],
+      [0.55, [0.14, 0.78, 0.66]],
+      [1.0, [0.37, 0.66, 1.0]]
+    ]
+  },
+  height: {
+    label: 'Height',
+    minLabel: 'Low',
+    maxLabel: 'High',
+    range: (data) => [data.stats.minHeight, data.stats.maxHeight],
+    value: (_x, _y, z) => z,
+    gradient: '#1f3b55, #23c7a9, #f2b84b',
+    stops: [
+      [0.0, [0.12, 0.23, 0.33]],
+      [0.55, [0.14, 0.78, 0.66]],
+      [1.0, [0.95, 0.72, 0.28]]
+    ]
+  },
+  flat: {
+    label: 'Flat',
+    minLabel: 'Points',
+    maxLabel: 'Uniform',
+    range: () => [0, 1],
+    value: () => 1,
+    gradient: '#23c7a9, #23c7a9',
+    stops: [
+      [0.0, [0.14, 0.78, 0.66]],
+      [1.0, [0.14, 0.78, 0.66]]
+    ]
+  }
+};
+
 const trailMaterial = new THREE.LineBasicMaterial({ color: 0xf2b84b, transparent: true, opacity: 0.8 });
 const trailGeometry = new THREE.BufferGeometry();
 const trail = new THREE.Line(trailGeometry, trailMaterial);
@@ -169,6 +238,8 @@ let currentFrame = null;
 let cameraSnap = true;
 let pointLoading = false;
 let lastPointFrameId = -1;
+let lastPointData = null;
+let lastPointQueryMs = null;
 let lastTrailFrameId = -1;
 let poseFramesReady = false;
 const poseCache = new Map();
@@ -216,6 +287,22 @@ const CAMERA_MODES = {
 const cameraTarget = new THREE.Vector3();
 const cameraDesired = new THREE.Vector3();
 const cameraLook = new THREE.Vector3();
+const cameraBaseOffset = new THREE.Vector3();
+const cameraAdjustedOffset = new THREE.Vector3();
+const cameraAdjustedLook = new THREE.Vector3();
+const cameraPanWorld = new THREE.Vector3();
+const cameraPanRight = new THREE.Vector3();
+const cameraPanUp = new THREE.Vector3();
+const TRACK_ZOOM_MIN = 0.35;
+const TRACK_ZOOM_MAX = 3.5;
+const TRACK_PAN_LIMIT = 45;
+const trackCameraOverrides = {};
+const trackDrag = {
+  active: false,
+  pointerId: null,
+  x: 0,
+  y: 0
+};
 const initialCamera = new URLSearchParams(window.location.search).get('camera');
 if (initialCamera && CAMERA_MODES[initialCamera]) cameraSelect.value = initialCamera;
 
@@ -232,6 +319,13 @@ function fmtTime(ms) {
   return new Date(ms).toISOString().replace('T', ' ').replace('Z', '');
 }
 
+function fmtCount(value) {
+  const n = Number(value || 0);
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(Math.round(n));
+}
+
 function base64ToBytes(text) {
   const bin = atob(text);
   const out = new Uint8Array(bin.length);
@@ -239,9 +333,38 @@ function base64ToBytes(text) {
   return out;
 }
 
+function createPointStats() {
+  return {
+    minIntensity: Infinity,
+    maxIntensity: -Infinity,
+    minDistance: Infinity,
+    maxDistance: -Infinity,
+    minHeight: Infinity,
+    maxHeight: -Infinity
+  };
+}
+
+function includePointStats(stats, x, y, z, intensity) {
+  const distance = Math.sqrt(x * x + y * y + z * z);
+  stats.minIntensity = Math.min(stats.minIntensity, intensity);
+  stats.maxIntensity = Math.max(stats.maxIntensity, intensity);
+  stats.minDistance = Math.min(stats.minDistance, distance);
+  stats.maxDistance = Math.max(stats.maxDistance, distance);
+  stats.minHeight = Math.min(stats.minHeight, z);
+  stats.maxHeight = Math.max(stats.maxHeight, z);
+}
+
+function finishPointStats(stats) {
+  for (const key of Object.keys(stats)) {
+    if (!Number.isFinite(stats[key])) stats[key] = 0;
+  }
+  return stats;
+}
+
 function pointArraysFromChunks(chunks) {
   const positions = [];
-  const colors = [];
+  const intensities = [];
+  const stats = createPointStats();
   let total = 0;
   for (const chunk of chunks) {
     const bytes = base64ToBytes(chunk.data);
@@ -250,40 +373,259 @@ function pointArraysFromChunks(chunks) {
       const x = view.getFloat32(i, true);
       const y = view.getFloat32(i + 4, true);
       const z = view.getFloat32(i + 8, true);
-      const intensity = Math.max(0.15, Math.min(1, view.getFloat32(i + 12, true)));
+      const intensity = Math.max(0, Math.min(1, view.getFloat32(i + 12, true) || 0));
       positions.push(x, y, z);
-      colors.push(0.1 + intensity * 0.25, 0.55 + intensity * 0.4, 0.72 + intensity * 0.22);
+      intensities.push(intensity);
+      includePointStats(stats, x, y, z, intensity);
       total++;
     }
   }
-  return { positions, colors, total };
+  return { positions, intensities, stats: finishPointStats(stats), total };
 }
 
 function pointArraysFromJson(points) {
   const positions = [];
-  const colors = [];
+  const intensities = [];
+  const stats = createPointStats();
   for (const p of points) {
-    const intensity = Math.max(0.15, Math.min(1, p[3] || 0.5));
-    positions.push(p[0], p[1], p[2]);
-    colors.push(0.1 + intensity * 0.25, 0.55 + intensity * 0.4, 0.72 + intensity * 0.22);
+    const x = p[0] || 0;
+    const y = p[1] || 0;
+    const z = p[2] || 0;
+    const intensity = Math.max(0, Math.min(1, p[3] || 0.5));
+    positions.push(x, y, z);
+    intensities.push(intensity);
+    includePointStats(stats, x, y, z, intensity);
   }
-  return { positions, colors, total: points.length };
+  return { positions, intensities, stats: finishPointStats(stats), total: points.length };
 }
 
-function updatePointCloud(payload) {
+function colorFromStops(stops, t, out, offset) {
+  const v = Math.max(0, Math.min(1, t));
+  for (let i = 1; i < stops.length; i++) {
+    if (v > stops[i][0]) continue;
+    const prev = stops[i - 1];
+    const next = stops[i];
+    const span = Math.max(0.0001, next[0] - prev[0]);
+    const local = (v - prev[0]) / span;
+    out[offset] = prev[1][0] + (next[1][0] - prev[1][0]) * local;
+    out[offset + 1] = prev[1][1] + (next[1][1] - prev[1][1]) * local;
+    out[offset + 2] = prev[1][2] + (next[1][2] - prev[1][2]) * local;
+    return;
+  }
+  const last = stops[stops.length - 1][1];
+  out[offset] = last[0];
+  out[offset + 1] = last[1];
+  out[offset + 2] = last[2];
+}
+
+function currentColorMode() {
+  return COLOR_MODES[colorSelect.value] || COLOR_MODES.intensity;
+}
+
+function colorsForPointData(data) {
+  const mode = currentColorMode();
+  const range = mode.range(data);
+  const min = range[0];
+  const max = range[1];
+  const span = Math.max(0.0001, max - min);
+  const colors = new Float32Array(data.total * 3);
+  for (let i = 0; i < data.total; i++) {
+    const x = data.positions[i * 3];
+    const y = data.positions[i * 3 + 1];
+    const z = data.positions[i * 3 + 2];
+    const intensity = data.intensities[i];
+    const value = mode.value(x, y, z, intensity);
+    colorFromStops(mode.stops, (value - min) / span, colors, i * 3);
+  }
+  return colors;
+}
+
+function formatLegendValue(mode, value) {
+  if (mode === COLOR_MODES.distance || mode === COLOR_MODES.height) return `${value.toFixed(1)}m`;
+  return value.toFixed(2);
+}
+
+function updateColorLegend(data) {
+  const mode = currentColorMode();
+  const range = data ? mode.range(data) : [0, 1];
+  colorModeLabel.textContent = mode.label;
+  colorRangeLabel.textContent = `${formatLegendValue(mode, range[0])} - ${formatLegendValue(mode, range[1])}`;
+  colorMinLabel.textContent = mode.minLabel;
+  colorMaxLabel.textContent = mode.maxLabel;
+  colorRamp.style.background = `linear-gradient(90deg, ${mode.gradient})`;
+}
+
+function pointFrameForTelemetry(payload, frameId) {
+  if (poseCache.has(frameId)) return poseCache.get(frameId);
+  if (payload && payload.frame) return payload.frame;
+  if (currentFrame && currentFrame.frameId === frameId) return currentFrame;
+  return null;
+}
+
+function updateTelemetryLabels() {
+  if (!currentFrame && !lastPointData) {
+    sourceFrameLabel.textContent = '--';
+    pointRatioLabel.textContent = '--';
+    downsampleLabel.textContent = '--';
+    queryLatencyLabel.textContent = '--';
+    return;
+  }
+
+  const pointData = lastPointData;
+  const sourceFrameData = pointData || currentFrame;
+  const source = sourceFrameData.sourceSequence || 'sequence';
+  const sourceFrame = sourceFrameData.sourceFrame != null ? sourceFrameData.sourceFrame : sourceFrameData.frameId;
+  const rawPoints = Number(pointData ? pointData.rawPointCount : currentFrame.pointCount || 0);
+  const shownPoints = pointData ? pointData.total : 0;
+  const ratio = rawPoints > 0 && shownPoints > 0 ? rawPoints / shownPoints : 0;
+
+  sourceFrameLabel.textContent = `${source} #${sourceFrame}`;
+  pointRatioLabel.textContent = shownPoints > 0 ? `${fmtCount(rawPoints)} / ${fmtCount(shownPoints)}` : `${fmtCount(rawPoints)} / --`;
+  downsampleLabel.textContent = ratio > 0 ? `${ratio.toFixed(ratio >= 10 ? 1 : 2)}x` : '--';
+  queryLatencyLabel.textContent = lastPointQueryMs != null ? `${Math.round(lastPointQueryMs)}ms` : '--';
+}
+
+function applyPointColorMode() {
+  if (!lastPointData || !pointCloud.geometry) {
+    updateColorLegend(null);
+    return;
+  }
+  pointCloud.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colorsForPointData(lastPointData), 3));
+  pointCloud.geometry.attributes.color.needsUpdate = true;
+  updateColorLegend(lastPointData);
+}
+
+function pointPayloadByteCount(payload) {
+  if (payload.chunks) {
+    return payload.chunks.reduce((sum, chunk) => sum + Number(chunk.byteCount || 0), 0);
+  }
+  return (payload.points || []).length * 16;
+}
+
+function updatePointCloud(payload, frameId, queryMs) {
   const data = payload.chunks ? pointArraysFromChunks(payload.chunks) : pointArraysFromJson(payload.points || []);
+  const pointFrame = pointFrameForTelemetry(payload, frameId);
+  data.frameId = frameId;
+  data.byteCount = pointPayloadByteCount(payload);
+  data.rawPointCount = Number(pointFrame && pointFrame.pointCount || 0);
+  data.sourceSequence = pointFrame && pointFrame.sourceSequence || 'sequence';
+  data.sourceFrame = pointFrame && pointFrame.sourceFrame != null ? pointFrame.sourceFrame : frameId;
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(data.colors, 3));
   pointCloud.geometry.dispose();
   pointCloud.geometry = geometry;
+  lastPointData = data;
+  lastPointQueryMs = queryMs;
+  applyPointColorMode();
   pointsLabel.textContent = String(data.total);
+  updateTelemetryLabels();
 }
 
 function updateTrail(x, y, z) {
   trailPoints.push(new THREE.Vector3(x, y, z + 0.05));
   if (trailPoints.length > 280) trailPoints.shift();
   trailGeometry.setFromPoints(trailPoints);
+}
+
+function resizeMiniMapCanvas() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = miniMap.clientWidth || 220;
+  const height = miniMap.clientHeight || 160;
+  const nextWidth = Math.max(1, Math.round(width * dpr));
+  const nextHeight = Math.max(1, Math.round(height * dpr));
+  if (miniMap.width !== nextWidth || miniMap.height !== nextHeight) {
+    miniMap.width = nextWidth;
+    miniMap.height = nextHeight;
+  }
+  miniMapCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { width: width, height: height };
+}
+
+function miniMapPoint(frame, point, centerX, centerY, scale) {
+  const yaw = frame.rotation && Number.isFinite(frame.rotation.yaw) ? frame.rotation.yaw : 0;
+  const dx = point.x - frame.position.x;
+  const dy = point.y - frame.position.y;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  const forward = dx * c + dy * s;
+  const lateral = -dx * s + dy * c;
+  return {
+    x: centerX + lateral * scale,
+    y: centerY - forward * scale
+  };
+}
+
+function drawMiniMapPointCloud(centerX, centerY, scale) {
+  const data = lastPointData;
+  if (!data || !data.total) return;
+
+  const positions = data.positions;
+  const stride = Math.max(1, Math.ceil(data.total / 1600));
+  miniMapCtx.fillStyle = 'rgba(119, 224, 216, 0.58)';
+  for (let i = 0; i < data.total; i += stride) {
+    const x = positions[i * 3];
+    const y = positions[i * 3 + 1];
+    if (!Number.isFinite(x) || !Number.isFinite(y) || Math.hypot(x, y) > MINI_MAP_RANGE_M) continue;
+    miniMapCtx.fillRect(centerX + y * scale - 0.6, centerY - x * scale - 0.6, 1.2, 1.2);
+  }
+}
+
+function drawMiniMap(frame) {
+  const size = resizeMiniMapCanvas();
+  const width = size.width;
+  const height = size.height;
+  miniMapCtx.clearRect(0, 0, width, height);
+  miniMapCtx.fillStyle = 'rgba(10, 13, 16, 0.72)';
+  miniMapCtx.fillRect(0, 0, width, height);
+  if (!frame) return;
+
+  const centerX = width / 2;
+  const centerY = height * 0.62;
+  const radius = Math.min(width * 0.42, centerY - 10, height - centerY - 4);
+  const scale = radius / MINI_MAP_RANGE_M;
+
+  drawMiniMapPointCloud(centerX, centerY, scale);
+
+  miniMapCtx.strokeStyle = 'rgba(156, 168, 180, 0.24)';
+  miniMapCtx.lineWidth = 1;
+  for (const ring of MINI_MAP_RINGS_M) {
+    miniMapCtx.beginPath();
+    miniMapCtx.arc(centerX, centerY, ring * scale, 0, Math.PI * 2);
+    miniMapCtx.stroke();
+  }
+
+  miniMapCtx.strokeStyle = 'rgba(156, 168, 180, 0.18)';
+  miniMapCtx.beginPath();
+  miniMapCtx.moveTo(centerX, 8);
+  miniMapCtx.lineTo(centerX, height - 8);
+  miniMapCtx.moveTo(8, centerY);
+  miniMapCtx.lineTo(width - 8, centerY);
+  miniMapCtx.stroke();
+
+  if (trailPoints.length > 1) {
+    miniMapCtx.beginPath();
+    for (let i = 0; i < trailPoints.length; i++) {
+      const point = miniMapPoint(frame, trailPoints[i], centerX, centerY, scale);
+      if (i === 0) miniMapCtx.moveTo(point.x, point.y);
+      else miniMapCtx.lineTo(point.x, point.y);
+    }
+    miniMapCtx.strokeStyle = 'rgba(242, 184, 75, 0.86)';
+    miniMapCtx.lineWidth = 2;
+    miniMapCtx.stroke();
+  }
+
+  miniMapCtx.fillStyle = '#23c7a9';
+  miniMapCtx.beginPath();
+  miniMapCtx.moveTo(centerX, centerY - 8);
+  miniMapCtx.lineTo(centerX - 6, centerY + 7);
+  miniMapCtx.lineTo(centerX + 6, centerY + 7);
+  miniMapCtx.closePath();
+  miniMapCtx.fill();
+
+  miniMapCtx.fillStyle = 'rgba(240, 244, 248, 0.86)';
+  miniMapCtx.font = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  miniMapCtx.fillText('FWD', centerX + 8, 18);
+  miniMapScaleLabel.textContent = `${MINI_MAP_RANGE_M}m`;
 }
 
 function clampFrameId(frameId) {
@@ -383,6 +725,66 @@ function localToWorld(frame, local, out) {
   return out;
 }
 
+function worldDeltaToLocal(frame, delta, out) {
+  const yaw = frame.rotation && Number.isFinite(frame.rotation.yaw) ? frame.rotation.yaw : 0;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  out.set(
+    delta.x * c + delta.y * s,
+    -delta.x * s + delta.y * c,
+    delta.z
+  );
+  return out;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function clampTrackPan(pan) {
+  pan.x = clamp(pan.x, -TRACK_PAN_LIMIT, TRACK_PAN_LIMIT);
+  pan.y = clamp(pan.y, -TRACK_PAN_LIMIT, TRACK_PAN_LIMIT);
+  pan.z = clamp(pan.z, -TRACK_PAN_LIMIT, TRACK_PAN_LIMIT);
+}
+
+function isTrackCameraMode() {
+  return (cameraSelect.value || 'chase') !== 'orbit';
+}
+
+function getTrackCameraOverride(mode) {
+  const key = mode || cameraSelect.value || 'chase';
+  if (!trackCameraOverrides[key]) {
+    trackCameraOverrides[key] = {
+      zoom: 1,
+      pan: new THREE.Vector3()
+    };
+  }
+  return trackCameraOverrides[key];
+}
+
+function resetTrackCamera(mode) {
+  const override = getTrackCameraOverride(mode);
+  override.zoom = 1;
+  override.pan.set(0, 0, 0);
+  cameraSnap = true;
+  if (currentFrame) applyCamera(currentFrame, true);
+}
+
+function addTrackPanFromPointer(frame, dx, dy) {
+  if (!frame) return;
+  const mode = cameraSelect.value || 'chase';
+  const override = getTrackCameraOverride(mode);
+  const targetDistance = Math.max(1, camera.position.distanceTo(cameraTarget));
+  const scale = 2 * targetDistance * Math.tan((camera.fov * Math.PI / 180) / 2) / Math.max(1, canvas.clientHeight);
+
+  cameraPanRight.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(-dx * scale);
+  cameraPanUp.setFromMatrixColumn(camera.matrixWorld, 1).multiplyScalar(dy * scale);
+  cameraPanWorld.copy(cameraPanRight).add(cameraPanUp);
+  worldDeltaToLocal(frame, cameraPanWorld, cameraPanWorld);
+  override.pan.add(cameraPanWorld);
+  clampTrackPan(override.pan);
+}
+
 function updateCameraFov(targetFov, immediate) {
   if (Math.abs(camera.fov - targetFov) < 0.05) return;
   camera.fov += (targetFov - camera.fov) * (immediate ? 1 : 0.18);
@@ -402,8 +804,12 @@ function applyCamera(frame, immediate) {
     return;
   }
 
-  localToWorld(frame, cfg.offset, cameraDesired);
-  localToWorld(frame, cfg.look, cameraLook);
+  const override = getTrackCameraOverride(mode);
+  cameraBaseOffset.copy(cfg.offset).sub(cfg.look).multiplyScalar(override.zoom);
+  cameraAdjustedLook.copy(cfg.look).add(override.pan);
+  cameraAdjustedOffset.copy(cameraAdjustedLook).add(cameraBaseOffset);
+  localToWorld(frame, cameraAdjustedOffset, cameraDesired);
+  localToWorld(frame, cameraAdjustedLook, cameraLook);
   const alpha = immediate ? 1 : cfg.smoothing;
   camera.position.lerp(cameraDesired, alpha);
   cameraTarget.lerp(cameraLook, alpha);
@@ -430,6 +836,8 @@ function renderFrame(frame, trailFrameId, immediate) {
   frameIdLabel.textContent = String(frame.frameId);
   speedLabel.textContent = `${Number(frame.speed || 0).toFixed(1)} m/s`;
   timeLabel.textContent = fmtTime(currentMs);
+  updateTelemetryLabels();
+  drawMiniMap(frame);
 }
 
 function renderPlayback(ms, immediate) {
@@ -453,9 +861,10 @@ async function requestPoints(frameId, force) {
   pointLoading = true;
   const lod = Number(lodSelect.value);
   try {
+    const queryStarted = performance.now();
     const pointPayload = await api(`/api/points?frameId=${id}&lod=${lod}`);
-    updatePointCloud(pointPayload);
     lastPointFrameId = id;
+    updatePointCloud(pointPayload, id, performance.now() - queryStarted);
     lodLabel.textContent = String(lod);
     sourceLabel.textContent = pointPayload.source === 'machbase' ? 'Machbase Neo live query' : 'synthetic fallback until data is ingested';
   } catch (err) {
@@ -480,6 +889,7 @@ function resize() {
   renderer.setSize(w, h, false);
   camera.aspect = w / Math.max(1, h);
   camera.updateProjectionMatrix();
+  drawMiniMap(currentFrame);
 }
 
 function animate(now) {
@@ -510,9 +920,66 @@ lodSelect.addEventListener('change', () => {
   requestPoints(clampFrameId(Math.round(frameIdForMs(currentMs))), true);
 });
 
+colorSelect.addEventListener('change', () => {
+  applyPointColorMode();
+});
+
 cameraSelect.addEventListener('change', () => {
   cameraSnap = true;
   if (currentFrame) applyCamera(currentFrame, true);
+});
+
+canvas.addEventListener('wheel', (event) => {
+  if (!isTrackCameraMode()) return;
+  event.preventDefault();
+  const mode = cameraSelect.value || 'chase';
+  const override = getTrackCameraOverride(mode);
+  override.zoom = clamp(override.zoom * Math.exp(event.deltaY * 0.001), TRACK_ZOOM_MIN, TRACK_ZOOM_MAX);
+  if (currentFrame) applyCamera(currentFrame, true);
+}, { passive: false });
+
+canvas.addEventListener('pointerdown', (event) => {
+  if (!isTrackCameraMode()) return;
+  const wantsPan = event.button === 2 || (event.button === 0 && event.shiftKey);
+  if (!wantsPan) return;
+  event.preventDefault();
+  trackDrag.active = true;
+  trackDrag.pointerId = event.pointerId;
+  trackDrag.x = event.clientX;
+  trackDrag.y = event.clientY;
+  canvas.setPointerCapture(event.pointerId);
+});
+
+canvas.addEventListener('pointermove', (event) => {
+  if (!trackDrag.active || event.pointerId !== trackDrag.pointerId) return;
+  event.preventDefault();
+  const dx = event.clientX - trackDrag.x;
+  const dy = event.clientY - trackDrag.y;
+  trackDrag.x = event.clientX;
+  trackDrag.y = event.clientY;
+  addTrackPanFromPointer(currentFrame, dx, dy);
+  if (currentFrame) applyCamera(currentFrame, true);
+});
+
+function endTrackDrag(event) {
+  if (!trackDrag.active || event.pointerId !== trackDrag.pointerId) return;
+  trackDrag.active = false;
+  trackDrag.pointerId = null;
+  try { canvas.releasePointerCapture(event.pointerId); } catch (_) {}
+}
+
+canvas.addEventListener('pointerup', endTrackDrag);
+canvas.addEventListener('pointercancel', endTrackDrag);
+
+canvas.addEventListener('contextmenu', (event) => {
+  if (!isTrackCameraMode()) return;
+  event.preventDefault();
+});
+
+canvas.addEventListener('dblclick', (event) => {
+  if (!isTrackCameraMode()) return;
+  event.preventDefault();
+  resetTrackCamera(cameraSelect.value || 'chase');
 });
 
 playButton.addEventListener('click', () => {

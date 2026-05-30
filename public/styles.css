@@ -126,9 +126,131 @@ p {
   white-space: nowrap;
 }
 
+.telemetry-panel {
+  position: absolute;
+  left: 18px;
+  bottom: 94px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 8px;
+  width: min(560px, calc(100vw - 36px));
+}
+
+.telemetry-panel div,
+.minimap-panel {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(24, 29, 34, 0.9);
+}
+
+.telemetry-panel div {
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.telemetry-panel span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.telemetry-panel strong {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.color-legend {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  width: min(280px, calc(100vw - 36px));
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(24, 29, 34, 0.9);
+  pointer-events: none;
+}
+
+.legend-head,
+.legend-scale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.legend-head span,
+.legend-scale span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.legend-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 620;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.legend-ramp {
+  height: 8px;
+  margin: 8px 0 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #18323d, #23c7a9, #f2b84b);
+}
+
+.minimap-panel {
+  position: absolute;
+  right: 18px;
+  top: 86px;
+  width: 246px;
+  padding: 10px 12px 12px;
+  pointer-events: none;
+}
+
+.minimap-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.minimap-head span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.minimap-head strong {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 620;
+}
+
+#miniMap {
+  display: block;
+  width: 100%;
+  height: 160px;
+  border-radius: 4px;
+  background: rgba(10, 13, 16, 0.72);
+}
+
 .controls {
   display: grid;
-  grid-template-columns: 44px minmax(140px, 1fr) 82px 92px 118px minmax(130px, 220px);
+  grid-template-columns: 44px minmax(140px, 1fr) 82px 92px 118px 118px minmax(130px, 220px);
   align-items: center;
   gap: 12px;
   min-height: 74px;
@@ -177,14 +299,14 @@ select {
   white-space: nowrap;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   .app-shell {
-    grid-template-rows: minmax(0, 1fr) 178px;
+    grid-template-rows: minmax(0, 1fr) 226px;
   }
 
   .controls {
-    grid-template-columns: 44px 1fr 82px;
-    grid-template-rows: 42px 42px 42px;
+    grid-template-columns: 44px 1fr 1fr;
+    grid-template-rows: 42px 42px 42px 42px;
   }
 
   #timeline {
@@ -199,8 +321,12 @@ select {
     grid-column: 2 / 3;
   }
 
-  #cameraSelect {
+  #colorSelect {
     grid-column: 3 / 4;
+  }
+
+  #cameraSelect {
+    grid-column: 1 / 4;
   }
 
   .time-label {
@@ -210,5 +336,23 @@ select {
 
   .readout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .telemetry-panel {
+    left: 12px;
+    bottom: 150px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: min(360px, calc(100vw - 24px));
+  }
+
+  .color-legend {
+    right: 12px;
+    top: 150px;
+    bottom: auto;
+    width: min(240px, calc(100vw - 24px));
+  }
+
+  .minimap-panel {
+    display: none;
   }
 }

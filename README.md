@@ -397,6 +397,9 @@ http://127.0.0.1:56802/
 - speed
 - point count
 - LOD 선택
+- point cloud 색상 모드와 범례
+- source frame, raw/shown point 비율, downsample 배율, query latency
+- top view 미니맵과 10m/25m/50m range ring
 - 카메라 선택
 - timeline 재생
 
@@ -411,6 +414,12 @@ Top
 Side
 Front
 ```
+
+카메라 조작:
+
+- `Orbit` 모드: 마우스 드래그, 휠, 우클릭 드래그로 자유 시점을 조작합니다.
+- 추적 모드: 차량 추적은 유지한 상태에서 마우스 휠로 거리 확대/축소, 우클릭 드래그 또는 Shift+드래그로 프레이밍을 이동합니다.
+- 추적 모드에서 더블클릭하면 현재 카메라의 거리와 프레이밍 보정을 초기화합니다.
 
 URL로 카메라를 직접 지정할 수도 있습니다.
 
