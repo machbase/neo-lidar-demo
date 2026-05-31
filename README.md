@@ -2,8 +2,22 @@
 
 KITTI raw autonomous-driving data를 Machbase Neo에 저장하고, 브라우저에서 3D LiDAR point cloud와 차량 pose를 재생하는 데모입니다.
 
-GitHub repository:
+  <table>
+    <tr>
+      <td width="33%">
+        <img src="https://github.com/machbase/neo-lidar-demo/blob/main/doc/images/neo-lidar-1.png" alt="Neo LiDAR demo 1" width="100%">
+      </td>
+      <td width="33%">
+        <img src="https://github.com/machbase/neo-lidar-demo/blob/main/doc/images/neo-lidar-2.png" alt="Neo LiDAR demo 2" width="100%">
+      </td>
+      <td width="33%">
+        <img src="https://github.com/machbase/neo-lidar-demo/blob/main/doc/images/neo-lidar-3.png" alt="Neo LiDAR demo 3" width="100%">
+      </td>
+    </tr>
+  </table>
 
+
+GitHub repository:
 ```text
 https://github.com/machbase/neo-lidar-demo.git
 ```
