@@ -18,7 +18,8 @@
 
 # 마크베이스 네오 접속
 - 마크베이스는 127.0.0.1 5656 및 (HTTP:5654)에 서비스 가능함.
+- 데모 소스는 Machbase Neo 설치 디렉터리 아래의 `neo-lidar-demo`를 기본 위치로 가정함.
+- JSH shell에서는 같은 위치를 `/work/neo-lidar-demo`로 접근한다고 가정함.
 
 위의 내용에 대해 궁금한 점은 물어보고, 데모 구현 계획을 세워라.
-샘플 소스는  ~/work/neo/current/public 참고해라.
-
+샘플 소스는 `/work/neo-lidar-demo`를 기준으로 참고해라.

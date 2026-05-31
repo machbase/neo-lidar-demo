@@ -2,92 +2,100 @@
 
 KITTI raw autonomous-driving data를 Machbase Neo에 저장하고, 브라우저에서 3D LiDAR point cloud와 차량 pose를 재생하는 데모입니다.
 
-이 문서는 처음 실행하는 사람도 그대로 따라 할 수 있도록 **Git clone부터 시작해서** 설치, 데이터 다운로드, DB 로딩, 서버 실행, 데모 확인 순서로 정리했습니다.
-
 GitHub repository:
 
 ```text
 https://github.com/machbase/neo-lidar-demo.git
 ```
 
-## Step 1. 준비물 확인
+## 실행 환경 구분
 
-필요한 것:
+이 문서는 명령 실행 위치를 명시합니다.
+
+| 표기 | 의미 | 사용하는 명령 |
+|---|---|---|
+| Linux shell | OS 터미널 | `git`, `unzip`, `curl`, `ss`, 환경변수 설정 |
+| JSH shell | Machbase Neo JSH 내부 shell | `./scripts/*.js`, `./server.js` |
+| PowerShell | Windows PowerShell | `Expand-Archive` |
+
+중요:
+
+- JSH shell은 Linux shell이 아닙니다.
+- JSH shell 내부에는 `export` 명령이 없습니다.
+- `export`, `unzip`, `curl`, `ss`, redirection, `setsid` 같은 명령은 Linux shell에서 실행합니다.
+- `.js` 스크립트는 JSH shell에서 실행합니다.
+
+이 문서의 경로 가정:
+
+```text
+Linux shell: <NEO_HOME>/neo-lidar-demo
+JSH shell:   /work/neo-lidar-demo
+```
+
+`<NEO_HOME>`은 Machbase Neo가 설치된 디렉토리입니다. JSH shell에서는 같은 설치 디렉토리가 `/work`로 보인다고 가정합니다.
+
+## 전체 흐름
+
+1. Linux shell에서 `<NEO_HOME>` 아래에 repository를 clone합니다.
+2. JSH shell에서 KITTI zip을 다운로드합니다.
+3. Linux shell 또는 PowerShell에서 zip을 풉니다.
+4. JSH shell에서 데이터 확인, 스키마 생성, ingest를 실행합니다.
+5. JSH shell에서 데모 API/UI 서버를 실행합니다.
+6. Linux shell에서 API 상태를 확인하고 브라우저로 접속합니다.
+
+## 준비물
 
 - Linux shell
 - Git
-- Machbase Neo 실행 파일
+- Machbase Neo 설치 디렉토리
 - 실행 중인 Machbase Neo DB
 - 인터넷 연결
-- 디스크 여유 공간. KITTI zip과 압축 해제 파일이 저장되므로 넉넉하게 준비합니다.
+- 충분한 디스크 공간
 
-이 프로젝트는 일반 Node.js 서버가 아니라 **Machbase Neo JSH runtime**에서 실행됩니다. 모든 `.js` 스크립트는 아래처럼 실행합니다.
+KITTI drive zip만 약 37 GiB입니다. zip 파일과 압축 해제 결과를 모두 저장할 공간을 준비합니다.
 
-```sh
-<machbase-neo> jsh <script.js>
+Machbase Neo DB 접속 기본값:
+
+```text
+host: 127.0.0.1
+port: 5656
+user: sys
+password: manager
 ```
 
-현재 개발 환경에서 확인된 실행 파일 예시는 다음과 같습니다.
+다른 DB 접속값을 써야 하면 Linux shell에서 Machbase Neo/JSH를 시작하기 전에 환경변수를 설정합니다. 이미 떠 있는 JSH shell 내부에서 `export`를 입력하는 방식은 아닙니다.
 
 ```sh
-/home/sjkim/work/neo/current/machbase-neo
+# Linux shell
+export PHY_DB_HOST=127.0.0.1
+export PHY_DB_PORT=5656
+export PHY_DB_USER=sys
+export PHY_DB_PASSWORD=manager
 ```
 
-환경마다 경로가 다를 수 있으므로, 먼저 실행 파일이 있는지 확인합니다.
+## 1. 프로젝트 받기
+
+Linux shell에서 실행합니다.
 
 ```sh
-ls -l /home/sjkim/work/neo/current/machbase-neo
-```
-
-편의를 위해 shell 변수로 등록합니다.
-
-```sh
-export NEO=/home/sjkim/work/neo/current/machbase-neo
-```
-
-동작 확인:
-
-```sh
-$NEO version
-```
-
-Machbase Neo DB가 떠 있어야 합니다. 이 데모 스크립트는 기본적으로 `127.0.0.1:5656`에 접속합니다.
-
-## Step 2. Git clone으로 프로젝트 받기
-
-작업 디렉터리를 만듭니다.
-
-```sh
-mkdir -p ~/work/neo/current/public
-cd ~/work/neo/current/public
-```
-
-누구나 바로 실행하기 쉬운 HTTPS URL로 clone합니다.
-
-```sh
+# Linux shell
+cd <NEO_HOME>
 git clone https://github.com/machbase/neo-lidar-demo.git
-```
-
-SSH key가 GitHub에 등록되어 있으면 SSH URL을 사용해도 됩니다.
-
-```sh
-git clone git@github.com:machbase/neo-lidar-demo.git
-```
-
-clone이 끝나면 프로젝트 디렉터리로 이동합니다.
-
-```sh
-cd ~/work/neo/current/public/neo-lidar-demo
-```
-
-현재 브랜치와 파일을 확인합니다.
-
-```sh
+cd neo-lidar-demo
 git status
 ls -la
 ```
 
-디렉터리 구조는 대략 다음과 같습니다.
+SSH key가 GitHub에 등록되어 있으면 SSH URL을 사용할 수 있습니다.
+
+```sh
+# Linux shell
+cd <NEO_HOME>
+git clone git@github.com:machbase/neo-lidar-demo.git
+cd neo-lidar-demo
+```
+
+디렉토리 구조:
 
 ```text
 app/             JSH HTTP server
@@ -97,54 +105,27 @@ public/          browser frontend
 data/            local dataset directory
 ```
 
-이미 이 저장소가 `/home/sjkim/work/neo/current/public/neo-lidar-demo`에 있다면 clone 단계는 생략하고 아래처럼 이동하면 됩니다.
-
-```sh
-cd /home/sjkim/work/neo/current/public/neo-lidar-demo
-```
-
-다른 이름의 디렉터리에 clone했다면, 이후 명령은 그 디렉터리 안에서 실행하면 됩니다.
-
-## Step 3. Machbase Neo DB 접속 기본값
-
-스크립트는 기본적으로 아래 DB 접속값을 사용합니다.
+JSH shell에서는 프로젝트가 아래 경로로 보여야 합니다.
 
 ```text
-host: 127.0.0.1
-port: 5656
-user: sys
-password: manager
+/work/neo-lidar-demo
 ```
 
-다른 DB에 연결해야 하면 환경변수로 지정합니다.
+## 2. KITTI 데이터 다운로드
 
-```sh
-export PHY_DB_HOST=127.0.0.1
-export PHY_DB_PORT=5656
-export PHY_DB_USER=sys
-export PHY_DB_PASSWORD=manager
+JSH shell에서 실행합니다.
+
+```text
+/ > cd /work/neo-lidar-demo
+/work/neo-lidar-demo > ./scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64 --download-only
 ```
 
-접속값을 바꿨다면 이후 모든 `$NEO jsh ...` 명령이 같은 환경변수를 사용합니다.
-
-## Step 4. 데이터 다운로드와 unzip
-
-데모는 KITTI raw 데이터 중 두 개 drive를 사용합니다.
+사용 데이터:
 
 ```text
 2011_09_30_drive_0028_sync
 2011_10_03_drive_0027_sync
 ```
-
-다운로드와 압축 해제는 분리해서 진행합니다. 이 문서에서는 JSH 스크립트를 ZIP 파일 다운로드에만 사용하고, 압축 해제는 OS의 외부 unzip 프로그램을 사용합니다. 두 drive zip만 약 37 GiB이므로 ZIP과 압축 해제 결과를 둘 다 저장할 디스크 공간을 충분히 확보해야 합니다.
-
-### 4-1. ZIP 다운로드
-
-```sh
-$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64 --download-only
-```
-
-`--parallel`은 동시에 받는 range chunk 수이고 `--chunk-mb`는 chunk 크기입니다. JSH HTTP 클라이언트는 range chunk를 파일에 쓰기 전에 메모리에 올리므로 다운로드 중 메모리 사용량은 대략 `parallel * chunk-mb` MiB 이상으로 잡아야 합니다. 스크립트는 기본적으로 이 값이 1024MiB를 넘으면 중단합니다. 메모리가 적은 WSL에서는 `--parallel 2 --chunk-mb 32`처럼 더 낮춰서 실행합니다.
 
 다운로드되는 주요 파일:
 
@@ -155,27 +136,40 @@ data/raw/kitti/archives/2011_10_03_calib.zip
 data/raw/kitti/archives/2011_10_03_drive_0027_sync.zip
 ```
 
-### 4-2. Linux 또는 WSL에서 unzip
+`--parallel`은 동시에 받는 range chunk 수이고 `--chunk-mb`는 chunk 크기입니다. JSH HTTP 클라이언트는 range chunk를 파일에 쓰기 전에 메모리에 올리므로 다운로드 중 메모리 사용량은 대략 `parallel * chunk-mb` MiB 이상으로 잡아야 합니다.
+
+메모리가 적은 환경에서는 아래처럼 낮춰서 실행합니다.
+
+```text
+/work/neo-lidar-demo > ./scripts/download-data.js --out data/raw/kitti --parallel 2 --chunk-mb 32 --download-only
+```
+
+## 3. 압축 해제
+
+압축 해제는 JSH shell이 아니라 OS shell에서 실행합니다.
+
+Linux shell 또는 WSL:
 
 ```sh
+# Linux shell, cwd: <NEO_HOME>/neo-lidar-demo
 unzip -o data/raw/kitti/archives/2011_09_30_calib.zip -d data/raw/kitti
 unzip -o data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip -d data/raw/kitti
 unzip -o data/raw/kitti/archives/2011_10_03_calib.zip -d data/raw/kitti
 unzip -o data/raw/kitti/archives/2011_10_03_drive_0027_sync.zip -d data/raw/kitti
 ```
 
-`unzip`이 없으면 먼저 설치합니다.
+`unzip`이 없으면 Linux shell에서 설치합니다.
 
 ```sh
+# Linux shell
 sudo apt update
 sudo apt install unzip
 ```
 
-### 4-3. Windows PowerShell에서 unzip
-
-Windows에서 프로젝트 디렉터리를 열고 PowerShell로 실행합니다.
+Windows PowerShell:
 
 ```powershell
+# PowerShell, cwd: <NEO_HOME>\neo-lidar-demo
 $dest = "data\raw\kitti"
 $archives = "data\raw\kitti\archives"
 
@@ -185,9 +179,10 @@ Expand-Archive -Force -Path "$archives\2011_10_03_calib.zip" -DestinationPath $d
 Expand-Archive -Force -Path "$archives\2011_10_03_drive_0027_sync.zip" -DestinationPath $dest
 ```
 
-7-Zip을 사용한다면 같은 위치에서 아래처럼 풀 수 있습니다.
+7-Zip:
 
 ```powershell
+# PowerShell, cwd: <NEO_HOME>\neo-lidar-demo
 $dest = "data\raw\kitti"
 $archives = "data\raw\kitti\archives"
 
@@ -197,41 +192,42 @@ $archives = "data\raw\kitti\archives"
 7z x "$archives\2011_10_03_drive_0027_sync.zip" "-o$dest" -y
 ```
 
-압축 해제 후 주요 디렉터리:
+압축 해제 후 주요 디렉토리:
 
 ```text
 data/raw/kitti/2011_09_30/2011_09_30_drive_0028_sync/
 data/raw/kitti/2011_10_03/2011_10_03_drive_0027_sync/
 ```
 
-데이터가 제대로 있는지 확인합니다.
+## 4. 데이터 확인
 
-```sh
-$NEO jsh scripts/check-data.js --data-root data/raw/kitti --sequence 2011_09_30_drive_0028_sync
-$NEO jsh scripts/check-data.js --data-root data/raw/kitti --sequence 2011_10_03_drive_0027_sync
+JSH shell에서 스크립트로 확인합니다.
+
+```text
+/work/neo-lidar-demo > ./scripts/check-data.js --data-root data/raw/kitti --sequence 2011_09_30_drive_0028_sync
+/work/neo-lidar-demo > ./scripts/check-data.js --data-root data/raw/kitti --sequence 2011_10_03_drive_0027_sync
 ```
-
-JSH 출력의 `cwd`가 `/work`로 보이더라도 정상입니다. 스크립트는 상대 `--data-root`를 셸에서 실행한 프로젝트 루트 기준으로 해석합니다.
 
 `velodyne_points/data`가 `true`로 나오면 LiDAR frame 파일이 있는 것입니다.
 
-frame 수를 shell에서 확인할 수도 있습니다.
+Linux shell에서 frame 수를 직접 확인할 수도 있습니다.
 
 ```sh
+# Linux shell, cwd: <NEO_HOME>/neo-lidar-demo
 find data/raw/kitti -path '*/velodyne_points/data/*.bin' -type f | wc -l
 ```
 
-현재 전체 로딩 대상은 `9721` frames입니다.
+전체 로딩 대상은 `9721` frames입니다.
 
-## Step 5. DB 테이블 생성
+## 5. 스키마 생성
 
-테이블과 인덱스를 생성합니다.
+JSH shell에서 실행합니다.
 
-```sh
-$NEO jsh scripts/schema.js
+```text
+/work/neo-lidar-demo > ./scripts/schema.js
 ```
 
-생성되는 데모 테이블:
+생성되는 테이블:
 
 ```text
 PHY_TIMELINE
@@ -245,60 +241,43 @@ IDX_PHY_TIMELINE_FRAME_ID
 IDX_PHY_LIDAR_FRAME_ID
 ```
 
-테이블 목록 확인:
+확인:
 
-```sh
-$NEO jsh scripts/list-tables.js
+```text
+/work/neo-lidar-demo > ./scripts/list-tables.js
+/work/neo-lidar-demo > ./scripts/list-indexes.js
 ```
 
-인덱스 확인:
+기존 데모 테이블을 지우고 다시 만들려면 아래를 실행합니다.
 
-```sh
-$NEO jsh scripts/list-indexes.js
+```text
+/work/neo-lidar-demo > ./scripts/reset-schema.js
 ```
-
-## Step 6. 기존 데모 테이블을 초기화하고 다시 만들기
-
-이미 로딩한 데이터를 지우고 처음부터 다시 시작하려면 아래 명령을 사용합니다.
 
 주의: `PHY_TIMELINE`, `PHY_LIDAR_FRAME` 데이터가 삭제됩니다.
 
-```sh
-$NEO jsh scripts/reset-schema.js
-```
+## 6. 데이터 로딩
 
-초기화 후 테이블과 인덱스가 다시 생성됩니다.
-
-## Step 7. 데이터 로딩
-
-로컬 KITTI 데이터를 Machbase Neo에 로딩합니다.
-
-```sh
-$NEO jsh scripts/ingest.js --data-root data/raw/kitti
-```
-
-기본 로딩 대상:
+JSH shell에서 실행합니다.
 
 ```text
-2011_09_30_drive_0028_sync
-2011_10_03_drive_0027_sync
+/work/neo-lidar-demo > ./scripts/ingest.js --data-root data/raw/kitti
 ```
+
+일부만 테스트 로딩하려면 `--limit`을 사용합니다.
+
+```text
+/work/neo-lidar-demo > ./scripts/reset-schema.js
+/work/neo-lidar-demo > ./scripts/ingest.js --data-root data/raw/kitti --limit 300
+```
+
+전체 데모를 보려면 `--limit` 없이 다시 로딩해야 합니다.
 
 로딩 결과는 하나의 논리 sequence로 저장됩니다.
 
 ```text
 dataset: kitti-raw
 sequence: kitti-raw-10m
-```
-
-로딩되는 내용:
-
-```text
-PHY_TIMELINE
-  frame별 pose, speed, point_count, event metadata JSON
-
-PHY_LIDAR_FRAME
-  frame별 원본 Velodyne .bin binary
 ```
 
 전체 로딩 결과는 다음과 같아야 합니다.
@@ -308,56 +287,42 @@ frames: 9721
 lidar: 9721
 ```
 
-일부만 테스트 로딩하고 싶으면 `--limit`을 사용할 수 있습니다.
+## 7. 데모 서버 실행
 
-```sh
-$NEO jsh scripts/reset-schema.js
-$NEO jsh scripts/ingest.js --data-root data/raw/kitti --limit 300
-```
-
-전체 데모를 보려면 `--limit` 없이 다시 로딩해야 합니다.
-
-## Step 8. DB에 어떻게 저장되는가
-
-원본 KITTI 파일과 DB 저장 관계는 다음과 같습니다.
-
-| 로컬 원본 파일 | DB 저장 위치 |
-|---|---|
-| `velodyne_points/data/*.bin` | `PHY_LIDAR_FRAME.value` |
-| `velodyne_points/timestamps.txt` | `PHY_TIMELINE.time`, `PHY_LIDAR_FRAME.time` |
-| `oxts/data/*.txt` | `PHY_TIMELINE.value` JSON 내부 pose/speed |
-| `image_00~03` | 현재 데모에서는 DB에 저장하지 않음 |
-| `calib_*.txt` | 현재 데모에서는 DB에 저장하지 않음 |
-
-LiDAR binary는 PNG 이미지가 아니라 point cloud입니다.
-
-한 점은 다음 4개 `float32` 값으로 구성됩니다.
+JSH shell에서 `app` 디렉토리로 이동한 뒤 실행합니다.
 
 ```text
-x, y, z, intensity
+/work/neo-lidar-demo > cd app
+/work/neo-lidar-demo/app > ./server.js --host 127.0.0.1 --port 56802
 ```
 
-한 점은 16 bytes이고, frame 하나는 이 점들의 반복입니다.
+정상 시작 메시지:
 
-## Step 9. 데모 서버 실행
-
-개발 중 터미널에서 바로 실행하려면:
-
-```sh
-$NEO jsh app/server.js --host 127.0.0.1 --port 56802
+```text
+neo-lidar-demo server started tcp 127.0.0.1:56802
 ```
 
-터미널을 닫아도 서버가 계속 살아있게 실행하려면:
+서버는 foreground에서 실행됩니다. 중지하려면 실행 중인 JSH shell에서 `Ctrl+C`를 누릅니다.
 
-```sh
-mkdir -p .run
-setsid $NEO jsh app/server.js --host 127.0.0.1 --port 56802 > .run/server-56802.log 2>&1 < /dev/null &
-echo $! > .run/server-56802.pid
+Gin debug mode 경고가 출력될 수 있습니다.
+
+```text
+[GIN-debug] [WARNING] Running in "debug" mode.
 ```
 
-서버 확인:
+이 경고는 데모 실행을 막지 않습니다. 로그를 줄여야 하는 운영 환경에서는 JSH shell 내부가 아니라 Machbase Neo process 또는 service를 시작하는 Linux 환경에 `GIN_MODE=release`를 설정합니다.
 
 ```sh
+# Linux shell, Machbase Neo/JSH를 시작하기 전에 설정
+export GIN_MODE=release
+```
+
+## 8. 서버 확인과 브라우저 접속
+
+서버 확인은 Linux shell에서 실행합니다.
+
+```sh
+# Linux shell
 curl http://127.0.0.1:56802/api/health
 ```
 
@@ -367,29 +332,25 @@ curl http://127.0.0.1:56802/api/health
 {"app":"neo-lidar-demo","ok":true}
 ```
 
-참고: health 응답의 `app` 값은 내부 데모 식별자입니다. GitHub 저장소 이름은 `neo-lidar-demo`입니다.
-
-서버 로그 확인:
-
-```sh
-tail -f .run/server-56802.log
-```
-
-서버 중지:
-
-```sh
-kill $(cat .run/server-56802.pid)
-```
-
-## Step 10. 브라우저에서 데모 보기
-
 브라우저에서 아래 주소를 엽니다.
 
 ```text
 http://127.0.0.1:56802/
 ```
 
-화면에서 확인할 수 있는 것:
+Machbase Neo HTTP 서버의 package 경로에서도 열 수 있습니다. 이 경우에도 `56802` 데모 API 서버가 같이 떠 있어야 합니다.
+
+```text
+http://127.0.0.1:5654/db/tql/neo-lidar-demo/public/index.html
+```
+
+API 서버 포트를 바꿔 실행했다면 `apiBase`를 URL에 지정합니다.
+
+```text
+http://127.0.0.1:5654/db/tql/neo-lidar-demo/public/index.html?apiBase=http://127.0.0.1:56803
+```
+
+## 화면 기능
 
 - 3D LiDAR point cloud
 - 차량 모델
@@ -421,7 +382,7 @@ Front
 - 추적 모드: 차량 추적은 유지한 상태에서 마우스 휠로 거리 확대/축소, 우클릭 드래그 또는 Shift+드래그로 프레이밍을 이동합니다.
 - 추적 모드에서 더블클릭하면 현재 카메라의 거리와 프레이밍 보정을 초기화합니다.
 
-URL로 카메라를 직접 지정할 수도 있습니다.
+URL로 카메라를 직접 지정할 수 있습니다.
 
 ```text
 http://127.0.0.1:56802/?camera=top
@@ -429,9 +390,9 @@ http://127.0.0.1:56802/?camera=side
 http://127.0.0.1:56802/?camera=hood
 ```
 
-## Step 11. 현재 로딩된 데이터 범위
+## 로딩 데이터
 
-현재 기본 전체 로딩 기준:
+기본 전체 로딩 기준:
 
 ```text
 2011_09_30_drive_0028_sync: 5177 frames
@@ -449,31 +410,33 @@ DB timeline 시간 범위:
 
 약 16분 49초 분량입니다.
 
-주의: `kitti-raw-10m`은 논리 sequence 이름입니다. 실제로는 로컬에 다운로드한 두 drive 전체를 이어 붙여 로딩합니다.
+`kitti-raw-10m`은 논리 sequence 이름입니다. 실제로는 로컬에 다운로드한 두 drive 전체를 이어 붙여 로딩합니다.
 
-## Step 12. API 확인
+원본 KITTI 파일과 DB 저장 관계:
 
-manifest:
+| 로컬 원본 파일 | DB 저장 위치 |
+|---|---|
+| `velodyne_points/data/*.bin` | `PHY_LIDAR_FRAME.value` |
+| `velodyne_points/timestamps.txt` | `PHY_TIMELINE.time`, `PHY_LIDAR_FRAME.time` |
+| `oxts/data/*.txt` | `PHY_TIMELINE.value` JSON 내부 pose/speed |
+| `image_00~03` | 현재 데모에서는 DB에 저장하지 않음 |
+| `calib_*.txt` | 현재 데모에서는 DB에 저장하지 않음 |
+
+LiDAR binary는 PNG 이미지가 아니라 point cloud입니다. 한 점은 16 bytes이며 다음 4개 `float32` 값으로 구성됩니다.
+
+```text
+x, y, z, intensity
+```
+
+## API 확인
+
+Linux shell에서 실행합니다.
 
 ```sh
+# Linux shell
 curl http://127.0.0.1:56802/api/manifest
-```
-
-pose 전체 로딩:
-
-```sh
 curl http://127.0.0.1:56802/api/poses
-```
-
-특정 frame metadata:
-
-```sh
 curl 'http://127.0.0.1:56802/api/frame?frameId=100'
-```
-
-특정 frame point cloud:
-
-```sh
 curl 'http://127.0.0.1:56802/api/points?frameId=100&lod=2'
 ```
 
@@ -487,9 +450,9 @@ LOD 2: 12개 중 1개 point 사용
 
 DB에는 LOD별 데이터를 따로 저장하지 않습니다. DB에는 원본 LiDAR binary만 저장하고, API가 요청 시 downsample합니다.
 
-## Step 13. 한 화면을 그릴 때 실행되는 SQL
+## 주요 SQL
 
-초기 화면 로딩:
+초기 manifest:
 
 ```sql
 SELECT dataset, sequence, MIN(time) min_time, MAX(time) max_time, COUNT(*) frame_count
@@ -498,6 +461,8 @@ GROUP BY dataset, sequence
 ORDER BY dataset, sequence
 LIMIT 20;
 ```
+
+pose cache 로딩:
 
 ```sql
 SELECT time, value, frame_id
@@ -519,129 +484,88 @@ LIMIT 1;
 
 차량 pose와 카메라는 브라우저 메모리에 미리 로딩한 pose cache에서 처리하므로, 매 렌더 프레임마다 SQL이 실행되지는 않습니다.
 
-## Step 14. 문제 해결
+## 문제 해결
 
 ### 브라우저에서 연결 거부가 나올 때
 
-서버가 떠 있는지 확인합니다.
+Linux shell에서 서버 포트를 확인합니다.
 
 ```sh
+# Linux shell
 ss -ltnp | grep 56802
 ```
 
-서버가 없으면 다시 실행합니다.
+서버가 없으면 JSH shell에서 다시 실행합니다.
+
+```text
+/ > cd /work/neo-lidar-demo/app
+/work/neo-lidar-demo/app > ./server.js --host 127.0.0.1 --port 56802
+```
+
+### 5654 package URL에서 화면은 뜨지만 플레이가 안 될 때
+
+아래 API 서버가 같이 떠 있어야 합니다.
+
+```text
+/work/neo-lidar-demo/app > ./server.js --host 127.0.0.1 --port 56802
+```
+
+그리고 Linux shell에서 API가 응답하는지 확인합니다.
 
 ```sh
-mkdir -p .run
-setsid $NEO jsh app/server.js --host 127.0.0.1 --port 56802 > .run/server-56802.log 2>&1 < /dev/null &
-echo $! > .run/server-56802.pid
+# Linux shell
+curl http://127.0.0.1:56802/api/health
 ```
 
 ### 데이터가 안 보일 때
 
-먼저 manifest를 확인합니다.
+Linux shell에서 manifest를 확인합니다.
 
 ```sh
+# Linux shell
 curl http://127.0.0.1:56802/api/manifest
 ```
 
-`frameCount`가 `0`이거나 synthetic fallback이 나오면 DB 로딩이 안 된 것입니다.
+`frameCount`가 `0`이거나 synthetic fallback이 나오면 DB 로딩이 안 된 것입니다. JSH shell에서 다시 로딩합니다.
 
-다시 로딩합니다.
-
-```sh
-$NEO jsh scripts/reset-schema.js
-$NEO jsh scripts/ingest.js --data-root data/raw/kitti
+```text
+/work/neo-lidar-demo > ./scripts/reset-schema.js
+/work/neo-lidar-demo > ./scripts/ingest.js --data-root data/raw/kitti
 ```
 
 ### 데이터 다운로드가 중간에 끊겼을 때
 
-다운로드 파일은 `data/raw/kitti/archives` 아래에 있습니다. 중간에 끊기면 먼저 같은 명령을 다시 실행합니다. 스크립트는 `.parts` 디렉터리의 완료된 chunk와 `.part` 조립 파일을 재사용합니다.
+먼저 JSH shell에서 같은 다운로드 명령을 다시 실행합니다. 스크립트는 `.parts` 디렉토리의 완료된 chunk와 `.part` 조립 파일을 재사용합니다.
 
-계속 실패하거나 파일 크기가 맞지 않는 zip이 남아 있으면 해당 zip, `.part`, `.parts`만 지우고 다시 실행합니다.
+```text
+/work/neo-lidar-demo > ./scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64 --download-only
+```
+
+계속 실패하거나 파일 크기가 맞지 않는 zip이 남아 있으면 Linux shell에서 해당 zip, `.part`, `.parts`만 지우고 다시 실행합니다.
 
 ```sh
+# Linux shell, cwd: <NEO_HOME>/neo-lidar-demo
 rm -rf data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip \
        data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip.part \
        data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip.parts
-$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64 --download-only
 ```
 
-다운로드는 끝났는데 압축 해제 중 실패했다면 ZIP을 다시 받지 말고 외부 unzip 명령만 다시 실행합니다. Linux 또는 WSL에서는 아래처럼 다시 풉니다.
+그 다음 JSH shell에서 다운로드를 재시도합니다.
 
-```sh
-unzip -o data/raw/kitti/archives/2011_09_30_calib.zip -d data/raw/kitti
-unzip -o data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip -d data/raw/kitti
-unzip -o data/raw/kitti/archives/2011_10_03_calib.zip -d data/raw/kitti
-unzip -o data/raw/kitti/archives/2011_10_03_drive_0027_sync.zip -d data/raw/kitti
+```text
+/work/neo-lidar-demo > ./scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64 --download-only
 ```
 
-`--parallel 16 --chunk-mb 512`처럼 실행하면 다운로드 단계에서만 동시에 최대 8192MiB 이상의 버퍼가 필요할 수 있습니다. 이런 설정은 메모리가 넉넉한 환경에서만 `--max-inflight-mb`로 명시적으로 허용합니다.
+다운로드는 끝났는데 압축 해제 중 실패했다면 ZIP을 다시 받지 말고 OS shell에서 압축 해제만 다시 실행합니다.
 
 ### 포인트가 느리게 뜰 때
 
 먼저 LOD 2로 봅니다. LOD 0은 훨씬 많은 point를 그립니다.
 
-또한 인덱스가 생성되어 있는지 확인합니다.
+인덱스가 생성되어 있는지도 JSH shell에서 확인합니다.
 
-```sh
-$NEO jsh scripts/list-indexes.js
+```text
+/work/neo-lidar-demo > ./scripts/list-indexes.js
 ```
 
 `IDX_PHY_LIDAR_FRAME_ID`가 있어야 합니다.
-
-## Step 15. Git clone부터 전체 처음 실행하는 빠른 순서
-
-아래는 새 머신 또는 빈 작업 디렉터리에서 시작하는 전체 절차입니다. 이미 clone되어 있으면 `git clone` 부분은 생략합니다.
-
-```sh
-# 1. Machbase Neo 실행 파일 위치를 지정합니다.
-export NEO=/home/sjkim/work/neo/current/machbase-neo
-
-# 2. 프로젝트를 받을 위치로 이동합니다.
-mkdir -p ~/work/neo/current/public
-cd ~/work/neo/current/public
-
-# 3. GitHub에서 프로젝트를 받습니다.
-git clone https://github.com/machbase/neo-lidar-demo.git
-
-# SSH key를 사용하고 싶으면 아래 SSH clone을 대신 사용합니다.
-# git clone git@github.com:machbase/neo-lidar-demo.git
-
-# 4. 프로젝트 디렉터리로 이동합니다.
-cd neo-lidar-demo
-
-# 5. 데이터 ZIP 파일을 병렬 다운로드합니다.
-#    drive zip만 약 37 GiB이므로 디스크 여유 공간이 필요합니다.
-$NEO jsh scripts/download-data.js --out data/raw/kitti --parallel 4 --chunk-mb 64 --download-only
-
-# 6. Linux 또는 WSL에서 외부 unzip 프로그램으로 압축을 풉니다.
-unzip -o data/raw/kitti/archives/2011_09_30_calib.zip -d data/raw/kitti
-unzip -o data/raw/kitti/archives/2011_09_30_drive_0028_sync.zip -d data/raw/kitti
-unzip -o data/raw/kitti/archives/2011_10_03_calib.zip -d data/raw/kitti
-unzip -o data/raw/kitti/archives/2011_10_03_drive_0027_sync.zip -d data/raw/kitti
-
-# 7. 데이터가 제대로 풀렸는지 확인합니다.
-$NEO jsh scripts/check-data.js --data-root data/raw/kitti --sequence 2011_09_30_drive_0028_sync
-$NEO jsh scripts/check-data.js --data-root data/raw/kitti --sequence 2011_10_03_drive_0027_sync
-
-# 8. 기존 데모 테이블을 지우고 새로 만듭니다.
-$NEO jsh scripts/reset-schema.js
-
-# 9. KITTI 데이터를 Machbase Neo DB에 로딩합니다.
-$NEO jsh scripts/ingest.js --data-root data/raw/kitti
-
-# 10. 데모 서버를 백그라운드로 실행합니다.
-mkdir -p .run
-setsid $NEO jsh app/server.js --host 127.0.0.1 --port 56802 > .run/server-56802.log 2>&1 < /dev/null &
-echo $! > .run/server-56802.pid
-
-# 11. 서버가 정상인지 확인합니다.
-curl http://127.0.0.1:56802/api/health
-```
-
-마지막으로 브라우저에서 엽니다.
-
-```text
-http://127.0.0.1:56802/
-```

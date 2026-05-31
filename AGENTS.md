@@ -13,8 +13,8 @@
 - Target the Machbase Neo JSH runtime, not plain Node.js. JSH is only partially Node.js-compatible.
 - Prefer JSH built-in modules and documented APIs before adding third-party packages.
 - JSH introduction: https://docs.machbase.com/neo/jsh/index.md
-- To run a `.js` file manually, use `machbase-neo jsh <file.js>`.
-- The location of the `machbase-neo` executable varies by environment, so always ask the user for its path before requesting or attempting local execution.
+- To run a `.js` file manually in this project, use the Machbase Neo JSH shell. Run project scripts from `/work/neo-lidar-demo`, for example `./scripts/schema.js`. Run the demo server from `/work/neo-lidar-demo/app` with `./server.js --host 127.0.0.1 --port 56802`.
+- Assume the repository is under the Machbase Neo installation directory and is visible in JSH as `/work/neo-lidar-demo`.
 
 ## Code Conventions
 

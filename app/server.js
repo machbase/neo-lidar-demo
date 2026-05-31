@@ -18,6 +18,18 @@ function sendIndex(ctx, file) {
   ctx.text(http.status.OK, fs.readFileSync(file, 'utf8'));
 }
 
+function setApiHeaders(ctx) {
+  // The Machbase package page is served from 5654, while this live API usually runs on 56802.
+  ctx.setHeader('access-control-allow-origin', '*');
+  ctx.setHeader('access-control-allow-methods', 'GET, OPTIONS');
+  ctx.setHeader('access-control-allow-headers', 'content-type');
+}
+
+function json(ctx, data) {
+  setApiHeaders(ctx);
+  return ctx.json(http.status.OK, data);
+}
+
 function queryFromCtx(ctx, names) {
   const out = {};
   for (let i = 0; i < names.length; i++) {
@@ -54,11 +66,11 @@ function main() {
   server.staticFile('/index.html', indexFile);
 
   server.get('/', (ctx) => sendIndex(ctx, indexFile));
-  server.get('/api/health', (ctx) => ctx.json(http.status.OK, { ok: true, app: 'neo-lidar-demo' }));
-  server.get('/api/manifest', (ctx) => ctx.json(http.status.OK, manifest(args)));
-  server.get('/api/poses', (ctx) => ctx.json(http.status.OK, poses(args, queryFromCtx(ctx, ['dataset', 'sequence', 'limit']))));
-  server.get('/api/frame', (ctx) => ctx.json(http.status.OK, frame(args, queryFromCtx(ctx, ['time', 'frameId', 'frameid', 'dataset', 'sequence']))));
-  server.get('/api/points', (ctx) => ctx.json(http.status.OK, points(args, queryFromCtx(ctx, ['time', 'frameId', 'frameid', 'lod', 'dataset', 'sequence']))));
+  server.get('/api/health', (ctx) => json(ctx, { ok: true, app: 'neo-lidar-demo' }));
+  server.get('/api/manifest', (ctx) => json(ctx, manifest(args)));
+  server.get('/api/poses', (ctx) => json(ctx, poses(args, queryFromCtx(ctx, ['dataset', 'sequence', 'limit']))));
+  server.get('/api/frame', (ctx) => json(ctx, frame(args, queryFromCtx(ctx, ['time', 'frameId', 'frameid', 'dataset', 'sequence']))));
+  server.get('/api/points', (ctx) => json(ctx, points(args, queryFromCtx(ctx, ['time', 'frameId', 'frameid', 'lod', 'dataset', 'sequence']))));
 
   server.serve((result) => {
     println('neo-lidar-demo server started', result.network, result.address);

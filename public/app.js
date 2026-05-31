@@ -303,16 +303,53 @@ const trackDrag = {
   x: 0,
   y: 0
 };
-const initialCamera = new URLSearchParams(window.location.search).get('camera');
+const urlParams = new URLSearchParams(window.location.search);
+const initialCamera = urlParams.get('camera');
 if (initialCamera && CAMERA_MODES[initialCamera]) cameraSelect.value = initialCamera;
 
-async function api(path) {
-  let res = await fetch(path);
-  if (!res.ok && path.indexOf('/api/') === 0) {
-    res = await fetch(path.replace('/api/', '/cgi-bin/api/'));
+function apiBaseFromLocation() {
+  const explicit = urlParams.get('apiBase');
+  if (explicit) return explicit.replace(/\/$/, '');
+  if (window.location.pathname.indexOf('/db/tql/neo-lidar-demo/public/') >= 0) {
+    return `${window.location.protocol}//${window.location.hostname}:56802`;
   }
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
+  return '';
+}
+
+const apiBase = apiBaseFromLocation();
+
+function apiUrl(base, path) {
+  if (!base) return path;
+  if (base.slice(-4) === '/api' && path.indexOf('/api/') === 0) return base + path.slice(4);
+  return base + path;
+}
+
+function uniqueUrls(urls) {
+  const seen = {};
+  const out = [];
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i];
+    if (!url || seen[url]) continue;
+    seen[url] = true;
+    out.push(url);
+  }
+  return out;
+}
+
+async function api(path) {
+  const urls = apiBase ? [apiUrl(apiBase, path), path] : [path];
+  if (path.indexOf('/api/') === 0) urls.push(path.replace('/api/', '/cgi-bin/api/'));
+  let lastError = null;
+  for (const url of uniqueUrls(urls)) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return res.json();
+      lastError = new Error(`${res.status} ${res.statusText}`);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('API request failed');
 }
 
 function fmtTime(ms) {
