@@ -1,5 +1,5 @@
 {
-  "name": "phy-ai-demo",
+  "name": "neo-lidar-demo",
   "version": "0.1.0",
   "scripts": {
     "server": "./app/server.js",

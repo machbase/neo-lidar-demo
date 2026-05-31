@@ -364,7 +364,7 @@ curl http://127.0.0.1:56802/api/health
 정상 응답:
 
 ```json
-{"app":"phy-ai-demo","ok":true}
+{"app":"neo-lidar-demo","ok":true}
 ```
 
 참고: health 응답의 `app` 값은 내부 데모 식별자입니다. GitHub 저장소 이름은 `neo-lidar-demo`입니다.

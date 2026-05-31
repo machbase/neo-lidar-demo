@@ -54,14 +54,14 @@ function main() {
   server.staticFile('/index.html', indexFile);
 
   server.get('/', (ctx) => sendIndex(ctx, indexFile));
-  server.get('/api/health', (ctx) => ctx.json(http.status.OK, { ok: true, app: 'phy-ai-demo' }));
+  server.get('/api/health', (ctx) => ctx.json(http.status.OK, { ok: true, app: 'neo-lidar-demo' }));
   server.get('/api/manifest', (ctx) => ctx.json(http.status.OK, manifest(args)));
   server.get('/api/poses', (ctx) => ctx.json(http.status.OK, poses(args, queryFromCtx(ctx, ['dataset', 'sequence', 'limit']))));
   server.get('/api/frame', (ctx) => ctx.json(http.status.OK, frame(args, queryFromCtx(ctx, ['time', 'frameId', 'frameid', 'dataset', 'sequence']))));
   server.get('/api/points', (ctx) => ctx.json(http.status.OK, points(args, queryFromCtx(ctx, ['time', 'frameId', 'frameid', 'lod', 'dataset', 'sequence']))));
 
   server.serve((result) => {
-    println('phy-ai-demo server started', result.network, result.address);
+    println('neo-lidar-demo server started', result.network, result.address);
   });
 }
 
