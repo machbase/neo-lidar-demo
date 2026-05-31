@@ -165,7 +165,12 @@ const pointMaterial = new THREE.PointsMaterial({
   transparent: true,
   opacity: 0.9
 });
-let pointCloud = new THREE.Points(new THREE.BufferGeometry(), pointMaterial);
+const pointGeometry = new THREE.BufferGeometry();
+let pointPositionAttribute = null;
+let pointColorAttribute = null;
+let pointCapacity = 0;
+let pointCloud = new THREE.Points(pointGeometry, pointMaterial);
+pointCloud.frustumCulled = false;
 scene.add(pointCloud);
 
 const COLOR_MODES = {
@@ -237,13 +242,20 @@ let lastTick = performance.now();
 let currentFrame = null;
 let cameraSnap = true;
 let pointLoading = false;
+let pendingPointFrameId = -1;
+let pendingPointForce = false;
+let lastPointRequestMs = 0;
 let lastPointFrameId = -1;
 let lastPointData = null;
 let lastPointQueryMs = null;
 let lastTrailFrameId = -1;
+let lastUiUpdateMs = 0;
 let poseFramesReady = false;
 const poseCache = new Map();
 const poseRequests = new Map();
+const POINT_FRAME_INTERVAL_MS = 90;
+const POINT_FRAME_STALE_TOLERANCE = 3;
+const UI_UPDATE_INTERVAL_MS = 80;
 
 const CAMERA_MODES = {
   orbit: { fov: 58 },
@@ -398,39 +410,59 @@ function finishPointStats(stats) {
   return stats;
 }
 
+function chunkPointCount(chunk, bytes) {
+  const byteCount = Number(chunk.byteCount || 0);
+  if (byteCount > 0) return Math.floor(byteCount / 16);
+  return Math.floor(bytes.byteLength / 16);
+}
+
 function pointArraysFromChunks(chunks) {
-  const positions = [];
-  const intensities = [];
-  const stats = createPointStats();
+  const decoded = [];
   let total = 0;
   for (const chunk of chunks) {
     const bytes = base64ToBytes(chunk.data);
+    decoded.push({ chunk, bytes });
+    total += chunkPointCount(chunk, bytes);
+  }
+  const positions = new Float32Array(total * 3);
+  const intensities = new Float32Array(total);
+  const stats = createPointStats();
+  let pointIndex = 0;
+  for (const item of decoded) {
+    const bytes = item.bytes;
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     for (let i = 0; i + 15 < bytes.byteLength; i += 16) {
       const x = view.getFloat32(i, true);
       const y = view.getFloat32(i + 4, true);
       const z = view.getFloat32(i + 8, true);
       const intensity = Math.max(0, Math.min(1, view.getFloat32(i + 12, true) || 0));
-      positions.push(x, y, z);
-      intensities.push(intensity);
+      const posIndex = pointIndex * 3;
+      positions[posIndex] = x;
+      positions[posIndex + 1] = y;
+      positions[posIndex + 2] = z;
+      intensities[pointIndex] = intensity;
       includePointStats(stats, x, y, z, intensity);
-      total++;
+      pointIndex++;
     }
   }
-  return { positions, intensities, stats: finishPointStats(stats), total };
+  return { positions, intensities, stats: finishPointStats(stats), total: pointIndex };
 }
 
 function pointArraysFromJson(points) {
-  const positions = [];
-  const intensities = [];
+  const positions = new Float32Array(points.length * 3);
+  const intensities = new Float32Array(points.length);
   const stats = createPointStats();
-  for (const p of points) {
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
     const x = p[0] || 0;
     const y = p[1] || 0;
     const z = p[2] || 0;
     const intensity = Math.max(0, Math.min(1, p[3] || 0.5));
-    positions.push(x, y, z);
-    intensities.push(intensity);
+    const posIndex = i * 3;
+    positions[posIndex] = x;
+    positions[posIndex + 1] = y;
+    positions[posIndex + 2] = z;
+    intensities[i] = intensity;
     includePointStats(stats, x, y, z, intensity);
   }
   return { positions, intensities, stats: finishPointStats(stats), total: points.length };
@@ -459,13 +491,13 @@ function currentColorMode() {
   return COLOR_MODES[colorSelect.value] || COLOR_MODES.intensity;
 }
 
-function colorsForPointData(data) {
+function colorsForPointData(data, target) {
   const mode = currentColorMode();
   const range = mode.range(data);
   const min = range[0];
   const max = range[1];
   const span = Math.max(0.0001, max - min);
-  const colors = new Float32Array(data.total * 3);
+  const colors = target && target.length >= data.total * 3 ? target : new Float32Array(data.total * 3);
   for (let i = 0; i < data.total; i++) {
     const x = data.positions[i * 3];
     const y = data.positions[i * 3 + 1];
@@ -523,12 +555,12 @@ function updateTelemetryLabels() {
 }
 
 function applyPointColorMode() {
-  if (!lastPointData || !pointCloud.geometry) {
+  if (!lastPointData || !pointColorAttribute) {
     updateColorLegend(null);
     return;
   }
-  pointCloud.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colorsForPointData(lastPointData), 3));
-  pointCloud.geometry.attributes.color.needsUpdate = true;
+  colorsForPointData(lastPointData, pointColorAttribute.array);
+  pointColorAttribute.needsUpdate = true;
   updateColorLegend(lastPointData);
 }
 
@@ -539,6 +571,30 @@ function pointPayloadByteCount(payload) {
   return (payload.points || []).length * 16;
 }
 
+function nextPointCapacity(total) {
+  let capacity = 1024;
+  while (capacity < total) capacity *= 2;
+  return capacity;
+}
+
+function ensurePointGeometryCapacity(total) {
+  if (pointCapacity >= total && pointPositionAttribute && pointColorAttribute) return;
+  pointCapacity = nextPointCapacity(total);
+  pointPositionAttribute = new THREE.BufferAttribute(new Float32Array(pointCapacity * 3), 3);
+  pointColorAttribute = new THREE.BufferAttribute(new Float32Array(pointCapacity * 3), 3);
+  pointPositionAttribute.setUsage(THREE.DynamicDrawUsage);
+  pointColorAttribute.setUsage(THREE.DynamicDrawUsage);
+  pointGeometry.setAttribute('position', pointPositionAttribute);
+  pointGeometry.setAttribute('color', pointColorAttribute);
+}
+
+function updatePointGeometry(data) {
+  ensurePointGeometryCapacity(data.total);
+  pointPositionAttribute.array.set(data.positions.subarray(0, data.total * 3), 0);
+  pointPositionAttribute.needsUpdate = true;
+  pointGeometry.setDrawRange(0, data.total);
+}
+
 function updatePointCloud(payload, frameId, queryMs) {
   const data = payload.chunks ? pointArraysFromChunks(payload.chunks) : pointArraysFromJson(payload.points || []);
   const pointFrame = pointFrameForTelemetry(payload, frameId);
@@ -547,10 +603,7 @@ function updatePointCloud(payload, frameId, queryMs) {
   data.rawPointCount = Number(pointFrame && pointFrame.pointCount || 0);
   data.sourceSequence = pointFrame && pointFrame.sourceSequence || 'sequence';
   data.sourceFrame = pointFrame && pointFrame.sourceFrame != null ? pointFrame.sourceFrame : frameId;
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.positions, 3));
-  pointCloud.geometry.dispose();
-  pointCloud.geometry = geometry;
+  updatePointGeometry(data);
   lastPointData = data;
   lastPointQueryMs = queryMs;
   applyPointColorMode();
@@ -674,6 +727,16 @@ function frameIdForMs(ms) {
   if (!manifest || !manifest.frameCount || maxMs <= minMs) return 0;
   const ratio = Math.max(0, Math.min(1, (ms - minMs) / (maxMs - minMs)));
   return ratio * (manifest.frameCount - 1);
+}
+
+function currentPointFrameId() {
+  return clampFrameId(Math.round(frameIdForMs(currentMs)));
+}
+
+function shouldApplyPointFrame(frameId) {
+  const speed = Math.max(1, Number(speedSelect.value) || 1);
+  const tolerance = Math.max(POINT_FRAME_STALE_TOLERANCE, Math.ceil(speed * 4));
+  return Math.abs(frameId - currentPointFrameId()) <= tolerance;
 }
 
 function prunePoseCache(centerFrameId) {
@@ -857,6 +920,7 @@ function applyCamera(frame, immediate) {
 
 function renderFrame(frame, trailFrameId, immediate) {
   if (!frame) return;
+  const now = performance.now();
   vehicle.position.set(frame.position.x, frame.position.y, frame.position.z);
   vehicle.rotation.set(frame.rotation.roll, frame.rotation.pitch, frame.rotation.yaw);
   pointCloud.position.copy(vehicle.position);
@@ -870,11 +934,14 @@ function renderFrame(frame, trailFrameId, immediate) {
     lastTrailFrameId = trailFrameId;
   }
 
-  frameIdLabel.textContent = String(frame.frameId);
-  speedLabel.textContent = `${Number(frame.speed || 0).toFixed(1)} m/s`;
-  timeLabel.textContent = fmtTime(currentMs);
-  updateTelemetryLabels();
-  drawMiniMap(frame);
+  if (immediate || now - lastUiUpdateMs >= UI_UPDATE_INTERVAL_MS) {
+    frameIdLabel.textContent = String(frame.frameId);
+    speedLabel.textContent = `${Number(frame.speed || 0).toFixed(1)} m/s`;
+    timeLabel.textContent = fmtTime(currentMs);
+    updateTelemetryLabels();
+    drawMiniMap(frame);
+    lastUiUpdateMs = now;
+  }
 }
 
 function renderPlayback(ms, immediate) {
@@ -889,25 +956,50 @@ function renderPlayback(ms, immediate) {
   }
   const frame = interpolateFrame(poseCache.get(baseId), poseCache.get(nextId), fraction);
   if (frame) renderFrame(frame, baseId, immediate);
-  requestPoints(clampFrameId(Math.round(exactFrame)), false);
+  requestPoints(currentPointFrameId(), false);
 }
 
 async function requestPoints(frameId, force) {
   const id = clampFrameId(frameId);
-  if (pointLoading || (!force && id === lastPointFrameId)) return;
+  const now = performance.now();
+  if (!force && id === lastPointFrameId) return;
+  if (!force && now - lastPointRequestMs < POINT_FRAME_INTERVAL_MS) {
+    pendingPointFrameId = id;
+    return;
+  }
+  if (pointLoading) {
+    pendingPointFrameId = id;
+    pendingPointForce = pendingPointForce || force;
+    return;
+  }
   pointLoading = true;
+  pendingPointFrameId = -1;
+  pendingPointForce = false;
+  lastPointRequestMs = now;
   const lod = Number(lodSelect.value);
   try {
     const queryStarted = performance.now();
     const pointPayload = await api(`/api/points?frameId=${id}&lod=${lod}`);
-    lastPointFrameId = id;
-    updatePointCloud(pointPayload, id, performance.now() - queryStarted);
-    lodLabel.textContent = String(lod);
-    sourceLabel.textContent = pointPayload.source === 'machbase' ? 'Machbase Neo live query' : 'synthetic fallback until data is ingested';
+    if (shouldApplyPointFrame(id)) {
+      lastPointFrameId = id;
+      updatePointCloud(pointPayload, id, performance.now() - queryStarted);
+      lodLabel.textContent = String(lod);
+      sourceLabel.textContent = pointPayload.source === 'machbase' ? 'Machbase Neo live query' : 'synthetic fallback until data is ingested';
+    } else {
+      pendingPointFrameId = currentPointFrameId();
+      pendingPointForce = true;
+    }
   } catch (err) {
     sourceLabel.textContent = err.message;
   } finally {
     pointLoading = false;
+    if (pendingPointFrameId >= 0) {
+      const nextFrameId = pendingPointFrameId;
+      const nextForce = pendingPointForce;
+      pendingPointFrameId = -1;
+      pendingPointForce = false;
+      setTimeout(() => requestPoints(nextFrameId, nextForce), 0);
+    }
   }
 }
 
