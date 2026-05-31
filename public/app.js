@@ -348,11 +348,15 @@ function uniqueUrls(urls) {
   return out;
 }
 
-async function api(path) {
+function apiUrls(path) {
   const urls = apiBase ? [apiUrl(apiBase, path), path] : [path];
   if (path.indexOf('/api/') === 0) urls.push(path.replace('/api/', '/cgi-bin/api/'));
+  return uniqueUrls(urls);
+}
+
+async function api(path) {
   let lastError = null;
-  for (const url of uniqueUrls(urls)) {
+  for (const url of apiUrls(path)) {
     try {
       const res = await fetch(url);
       if (res.ok) return res.json();
@@ -362,6 +366,37 @@ async function api(path) {
     }
   }
   throw lastError || new Error('API request failed');
+}
+
+async function apiBinary(path) {
+  let lastError = null;
+  for (const url of apiUrls(path)) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        lastError = new Error(`${res.status} ${res.statusText}`);
+        continue;
+      }
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.indexOf('application/octet-stream') < 0) {
+        try {
+          const payload = await res.json();
+          lastError = new Error(payload.reason || payload.warning || 'Binary point API unavailable');
+        } catch (_) {
+          lastError = new Error('Binary point API unavailable');
+        }
+        continue;
+      }
+      return {
+        buffer: await res.arrayBuffer(),
+        headers: res.headers,
+        url: url
+      };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('Binary API request failed');
 }
 
 function fmtTime(ms) {
@@ -381,6 +416,8 @@ function base64ToBytes(text) {
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
+
+const IS_LITTLE_ENDIAN = new Uint8Array(new Uint32Array([0x01020304]).buffer)[0] === 4;
 
 function createPointStats() {
   return {
@@ -416,26 +453,15 @@ function chunkPointCount(chunk, bytes) {
   return Math.floor(bytes.byteLength / 16);
 }
 
-function pointArraysFromChunks(chunks) {
-  const decoded = [];
-  let total = 0;
-  for (const chunk of chunks) {
-    const bytes = base64ToBytes(chunk.data);
-    decoded.push({ chunk, bytes });
-    total += chunkPointCount(chunk, bytes);
-  }
-  const positions = new Float32Array(total * 3);
-  const intensities = new Float32Array(total);
-  const stats = createPointStats();
-  let pointIndex = 0;
-  for (const item of decoded) {
-    const bytes = item.bytes;
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    for (let i = 0; i + 15 < bytes.byteLength; i += 16) {
-      const x = view.getFloat32(i, true);
-      const y = view.getFloat32(i + 4, true);
-      const z = view.getFloat32(i + 8, true);
-      const intensity = Math.max(0, Math.min(1, view.getFloat32(i + 12, true) || 0));
+function appendPointBytes(bytes, positions, intensities, stats, pointIndex) {
+  const total = Math.floor(bytes.byteLength / 16);
+  if (IS_LITTLE_ENDIAN && bytes.byteOffset % 4 === 0) {
+    const values = new Float32Array(bytes.buffer, bytes.byteOffset, total * 4);
+    for (let i = 0, v = 0; i < total; i++, v += 4) {
+      const x = values[v];
+      const y = values[v + 1];
+      const z = values[v + 2];
+      const intensity = Math.max(0, Math.min(1, values[v + 3] || 0));
       const posIndex = pointIndex * 3;
       positions[posIndex] = x;
       positions[posIndex + 1] = y;
@@ -444,8 +470,51 @@ function pointArraysFromChunks(chunks) {
       includePointStats(stats, x, y, z, intensity);
       pointIndex++;
     }
+    return pointIndex;
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let i = 0; i + 15 < bytes.byteLength; i += 16) {
+    const x = view.getFloat32(i, true);
+    const y = view.getFloat32(i + 4, true);
+    const z = view.getFloat32(i + 8, true);
+    const intensity = Math.max(0, Math.min(1, view.getFloat32(i + 12, true) || 0));
+    const posIndex = pointIndex * 3;
+    positions[posIndex] = x;
+    positions[posIndex + 1] = y;
+    positions[posIndex + 2] = z;
+    intensities[pointIndex] = intensity;
+    includePointStats(stats, x, y, z, intensity);
+    pointIndex++;
+  }
+  return pointIndex;
+}
+
+function pointArraysFromByteViews(byteViews, total) {
+  const positions = new Float32Array(total * 3);
+  const intensities = new Float32Array(total);
+  const stats = createPointStats();
+  let pointIndex = 0;
+  for (const bytes of byteViews) {
+    pointIndex = appendPointBytes(bytes, positions, intensities, stats, pointIndex);
   }
   return { positions, intensities, stats: finishPointStats(stats), total: pointIndex };
+}
+
+function pointArraysFromChunks(chunks) {
+  const decoded = [];
+  let total = 0;
+  for (const chunk of chunks) {
+    const bytes = base64ToBytes(chunk.data);
+    decoded.push(bytes);
+    total += chunkPointCount(chunk, bytes);
+  }
+  return pointArraysFromByteViews(decoded, total);
+}
+
+function pointArraysFromBinary(buffer) {
+  const bytes = new Uint8Array(buffer);
+  return pointArraysFromByteViews([bytes], Math.floor(bytes.byteLength / 16));
 }
 
 function pointArraysFromJson(points) {
@@ -565,6 +634,7 @@ function applyPointColorMode() {
 }
 
 function pointPayloadByteCount(payload) {
+  if (payload.buffer) return Number(payload.byteCount || payload.buffer.byteLength || 0);
   if (payload.chunks) {
     return payload.chunks.reduce((sum, chunk) => sum + Number(chunk.byteCount || 0), 0);
   }
@@ -596,7 +666,9 @@ function updatePointGeometry(data) {
 }
 
 function updatePointCloud(payload, frameId, queryMs) {
-  const data = payload.chunks ? pointArraysFromChunks(payload.chunks) : pointArraysFromJson(payload.points || []);
+  const data = payload.buffer
+    ? pointArraysFromBinary(payload.buffer)
+    : payload.chunks ? pointArraysFromChunks(payload.chunks) : pointArraysFromJson(payload.points || []);
   const pointFrame = pointFrameForTelemetry(payload, frameId);
   data.frameId = frameId;
   data.byteCount = pointPayloadByteCount(payload);
@@ -959,6 +1031,31 @@ function renderPlayback(ms, immediate) {
   requestPoints(currentPointFrameId(), false);
 }
 
+function headerNumber(headers, name, fallback) {
+  const value = Number(headers.get(name));
+  return Number.isFinite(value) ? value : fallback;
+}
+
+async function requestPointPayload(frameId, lod) {
+  try {
+    const binary = await apiBinary(`/api/points.bin?frameId=${frameId}&lod=${lod}`);
+    const payloadFrameId = headerNumber(binary.headers, 'x-neo-frame-id', frameId);
+    const pointCount = headerNumber(binary.headers, 'x-neo-point-count', Math.floor(binary.buffer.byteLength / 16));
+    return {
+      ok: true,
+      source: binary.headers.get('x-neo-source') || 'machbase',
+      encoding: 'binary-f32xyzi',
+      frame: { frameId: payloadFrameId },
+      lod: headerNumber(binary.headers, 'x-neo-lod', lod),
+      pointCount: pointCount,
+      byteCount: headerNumber(binary.headers, 'x-neo-byte-count', binary.buffer.byteLength),
+      buffer: binary.buffer
+    };
+  } catch (_) {
+    return api(`/api/points?frameId=${frameId}&lod=${lod}`);
+  }
+}
+
 async function requestPoints(frameId, force) {
   const id = clampFrameId(frameId);
   const now = performance.now();
@@ -979,7 +1076,7 @@ async function requestPoints(frameId, force) {
   const lod = Number(lodSelect.value);
   try {
     const queryStarted = performance.now();
-    const pointPayload = await api(`/api/points?frameId=${id}&lod=${lod}`);
+    const pointPayload = await requestPointPayload(id, lod);
     if (shouldApplyPointFrame(id)) {
       lastPointFrameId = id;
       updatePointCloud(pointPayload, id, performance.now() - queryStarted);

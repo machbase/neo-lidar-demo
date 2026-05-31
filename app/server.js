@@ -5,7 +5,7 @@ const http = require('http');
 const path = require('path');
 const process = require('process');
 const ROOT = path.dirname(path.dirname(path.resolve(process.argv[1])));
-const { frame, manifest, points, poses } = require(path.join(ROOT, 'lib', 'api.js'));
+const { frame, manifest, points, pointsBinary, poses } = require(path.join(ROOT, 'lib', 'api.js'));
 const { intArg, parseArgs } = require(path.join(ROOT, 'lib', 'env.js'));
 
 function println() {
@@ -23,11 +23,39 @@ function setApiHeaders(ctx) {
   ctx.setHeader('access-control-allow-origin', '*');
   ctx.setHeader('access-control-allow-methods', 'GET, OPTIONS');
   ctx.setHeader('access-control-allow-headers', 'content-type');
+  ctx.setHeader('access-control-expose-headers', 'x-neo-source, x-neo-lod, x-neo-frame-id, x-neo-point-count, x-neo-byte-count');
 }
 
 function json(ctx, data) {
   setApiHeaders(ctx);
   return ctx.json(http.status.OK, data);
+}
+
+function setPointHeaders(ctx, payload) {
+  const frame = payload && payload.frame || {};
+  ctx.setHeader('x-neo-source', String(payload && payload.source || ''));
+  ctx.setHeader('x-neo-lod', String(payload && payload.lod != null ? payload.lod : ''));
+  ctx.setHeader('x-neo-frame-id', String(frame.frameId != null ? frame.frameId : ''));
+  ctx.setHeader('x-neo-point-count', String(payload && payload.pointCount != null ? payload.pointCount : 0));
+  ctx.setHeader('x-neo-byte-count', String(payload && payload.byteCount != null ? payload.byteCount : 0));
+}
+
+function binary(ctx, payload) {
+  setApiHeaders(ctx);
+  if (!payload || !payload.ok || !payload.bytes) return json(ctx, payload || { ok: false, reason: 'empty point payload' });
+  setPointHeaders(ctx, payload);
+
+  // RouterContext embeds gin.Context in JSH v8.5, which exposes Data/data for byte responses.
+  for (const name of ['data', 'Data']) {
+    try {
+      if (typeof ctx[name] === 'function') return ctx[name](http.status.OK, 'application/octet-stream', payload.bytes);
+    } catch (_) {}
+  }
+  return json(ctx, {
+    ok: false,
+    source: payload.source,
+    reason: 'binary response is not supported by this JSH runtime'
+  });
 }
 
 function queryFromCtx(ctx, names) {
@@ -71,6 +99,7 @@ function main() {
   server.get('/api/poses', (ctx) => json(ctx, poses(args, queryFromCtx(ctx, ['dataset', 'sequence', 'limit']))));
   server.get('/api/frame', (ctx) => json(ctx, frame(args, queryFromCtx(ctx, ['time', 'frameId', 'frameid', 'dataset', 'sequence']))));
   server.get('/api/points', (ctx) => json(ctx, points(args, queryFromCtx(ctx, ['time', 'frameId', 'frameid', 'lod', 'dataset', 'sequence']))));
+  server.get('/api/points.bin', (ctx) => binary(ctx, pointsBinary(args, queryFromCtx(ctx, ['time', 'frameId', 'frameid', 'lod', 'dataset', 'sequence']))));
 
   server.serve((result) => {
     println('neo-lidar-demo server started', result.network, result.address);
